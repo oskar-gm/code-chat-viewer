@@ -1,0 +1,120 @@
+# Claude Code Visualizer - .gitignore
+# Created by Óscar González Martín
+
+# === Python ===
+# Compiled Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Type checkers and linters
+.mypy_cache/
+.pytest_cache/
+.coverage
+*.cover
+
+# === IDEs, Editors ===
+# VSCode
+.vscode/
+*.code-workspace
+
+# Claude Code
+.claude/
+
+# PyCharm
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# === Operating Systems ===
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# === Project Specific ===
+# Test files and outputs (generated during development)
+test_*.json
+test_*.html
+sample_*.json
+sample_*.html
+output_*.html
+temp_*.html
+debug_*.html
+
+# Development folders
+debug/
+tmp/
+temp/
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+*.orig
+
+# Personal notes and project management files
+TODO.md
+NOTES.md
+CLAUDE.md
+INSTRUCCIONES.md
+REGISTRO.md
+*.draft
+
+# Distribution archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Logs
+*.log
+logs/
+
+# === Security ===
+# Secrets and credentials
+secrets.json
+.secrets
+credentials.json
+*.key
+*.pem
+*.cert
+.env.local
+.env.*.local
