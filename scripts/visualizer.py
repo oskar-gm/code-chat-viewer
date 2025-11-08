@@ -345,7 +345,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="generator" content="Claude Code Visualizer v1.0 - https://github.com/oskar-gm/cl-code-visualizer">
     <meta name="robots" content="index, follow">
     <meta name="language" content="English, Spanish">
-    <meta name="language" content="English, Spanish">
 
     <!-- Open Graph / Social Media Meta Tags -->
     <meta property="og:type" content="article">
@@ -355,13 +354,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta property="og:site_name" content="Claude Code Visualizer">
     <meta property="og:locale" content="en_US">
     <meta property="og:locale:alternate" content="es_ES">
-    <meta property="og:locale" content="en_US">
-    <meta property="og:locale:alternate" content="es_ES">
-
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Claude Code Conversation Visualization">
-    <meta name="twitter:description" content="Professional HTML export from Claude Code JSONL chat logs">
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary">
@@ -371,7 +363,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <!-- Author & Publisher -->
     <link rel="author" href="https://nucleoia.es">
     <link rel="canonical" href="https://github.com/oskar-gm/cl-code-visualizer">
-    <meta name="publisher" content="nucleoia.es">
     <meta name="publisher" content="nucleoia.es">
 
     <title>Claude Code Conversation - Terminal View</title>
@@ -732,7 +723,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         <div class="terminal-header">
             <div class="terminal-title">
                 <span>▶</span>
-                <span>Claude Code Chat Viewer V3 (CORREGIDO)</span>
+                <span>Claude Code Chat Viewer</span>
             </div>
             <div class="terminal-controls">
                 <span class="terminal-btn btn-close"></span>
@@ -861,7 +852,7 @@ def main():
     import sys
     
     if len(sys.argv) < 2:
-        print("Uso: python claude_code_visualizer_v3.py <archivo_json> [archivo_salida.html]")
+        print("Uso: python visualizer.py <archivo_json> [archivo_salida.html]")
         sys.exit(1)
     
     input_file = sys.argv[1]
@@ -875,7 +866,7 @@ def main():
     messages = parse_chat_json(input_file)
     print(f"✅ {len(messages)} líneas parseadas")
     
-    print(f"🔄 Generando HTML en estilo terminal (V3 CORREGIDO)...")
+    print(f"🔄 Generando HTML en estilo terminal...")
     generate_html(messages, output_file)
     
     print(f"\n🎉 ¡Conversión completada!")
