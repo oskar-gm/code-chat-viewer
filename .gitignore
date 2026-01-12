@@ -90,6 +90,9 @@ temp/
 *.tmp
 *.orig
 
+# Claude Code temp files
+tmpclaude-*
+
 # Personal notes and project management files
 TODO.md
 NOTES.md
