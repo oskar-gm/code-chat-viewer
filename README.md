@@ -5,7 +5,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
 [![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.0)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
+[![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
+
+### Chat View
+![Chat View](https://github.com/oskar-gm/code-chat-viewer/releases/download/v2.0/ccv-2.0-screenshot-1.jpeg)
+
+### Dashboard
+![Dashboard](https://github.com/oskar-gm/code-chat-viewer/releases/download/v2.0/ccv-2.0-screenshot-3.jpeg)
 
 ## Quick Download
 
