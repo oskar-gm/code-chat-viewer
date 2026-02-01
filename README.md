@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
 [![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.0)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet.svg)](https://claude.ai/code)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ## Quick Download
 
@@ -24,9 +24,9 @@ Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 <a name="english"></a>
 ## English
 
-### Direct Claude Code Compatibility
+### Direct Claude Code CLI Compatibility
 
-**Claude Code does everything for you.** This skill is designed to work directly with [Claude Code](https://claude.ai/code). Once installed, Claude Code will:
+**Claude Code does everything for you.** This skill is designed to work directly with [Claude Code CLI](https://github.com/anthropics/claude-code) (Anthropic's command-line tool for developers, not the web interface). Once installed, Claude Code will:
 
 - **Detect** your Claude Code chat files automatically
 - **Ask** your preferences through interactive setup
@@ -253,9 +253,9 @@ For questions, suggestions, or bug reports:
 <a name="español"></a>
 ## Español
 
-### Compatibilidad directa con Claude Code
+### Compatibilidad directa con Claude Code CLI
 
-**Claude Code lo hace todo por ti.** Esta skill está diseñada para funcionar directamente con [Claude Code](https://claude.ai/code). Una vez instalada, Claude Code:
+**Claude Code lo hace todo por ti.** Esta skill está diseñada para funcionar directamente con [Claude Code CLI](https://github.com/anthropics/claude-code) (la herramienta de línea de comandos de Anthropic para desarrolladores, no la interfaz web). Una vez instalada, Claude Code:
 
 - **Detecta** tus archivos de chat de Claude Code automáticamente
 - **Pregunta** tus preferencias mediante un setup interactivo
