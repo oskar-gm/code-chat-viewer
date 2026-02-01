@@ -23,10 +23,10 @@ SOFTWARE.
 ---
 
 ABOUT THIS SOFTWARE:
-Name: Claude Code Visualizer
+Name: Code Chat Viewer
 Author: Óscar González Martín
-Version: 1.0
-Repository: https://github.com/oskar-gm/cl-code-visualizer
+Version: 2.0
+Repository: https://github.com/oskar-gm/code-chat-viewer
 Website: https://nucleoia.es
 Contact: oscar@nucleoia.es
 
@@ -34,7 +34,7 @@ ATTRIBUTION REQUIREMENTS:
 When using, modifying, or distributing this software, you must:
 1. Keep this LICENSE file intact and unmodified
 2. Credit the original author: Óscar González Martín
-3. Include a link to the original repository: https://github.com/oskar-gm/cl-code-visualizer
+3. Include a link to the original repository: https://github.com/oskar-gm/code-chat-viewer
 4. Clearly state any modifications made to the original work
 
 AUTHOR'S RIGHTS:

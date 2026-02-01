@@ -1,17 +1,19 @@
-# Claude Code Visualizer
+# Code Chat Viewer
+
+> Convert Claude Code chat logs (JSONL) to professional, browsable HTML visualizations. Export AI conversations, build interactive dashboards, and organize your coding assistant history — with or without Claude Code.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.0-green.svg)](https://github.com/oskar-gm/cl-code-visualizer/releases/tag/v1.0)
-[![Download](https://img.shields.io/badge/download-v1.0-blue.svg)](https://github.com/oskar-gm/cl-code-visualizer/releases/tag/v1.0)
+[![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.0)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet.svg)](https://claude.ai/code)
 
-## 📥 Quick Download
+## Quick Download
 
-**Latest version:** [⬇️ Download latest](https://github.com/oskar-gm/cl-code-visualizer/releases/latest) - Always up-to-date
+**Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 1.0:** [⬇️ Download v1.0.zip](https://github.com/oskar-gm/cl-code-visualizer/archive/refs/tags/v1.0.zip) - Stable release
+**Version 2.0:** [Download v2.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.0.zip) - Stable release
 
-Or browse all [Releases](https://github.com/oskar-gm/cl-code-visualizer/releases)
+Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
 ---
 
@@ -20,95 +22,189 @@ Or browse all [Releases](https://github.com/oskar-gm/cl-code-visualizer/releases
 ---
 
 <a name="english"></a>
-## 🇬🇧 English
+## English
 
-### Description
+### Direct Claude Code Compatibility
 
-Professional skill for converting Claude Code chat JSON files (VS Code terminal) into formatted HTML visualizations with consistent and aesthetic styling.
+**Claude Code does everything for you.** This skill is designed to work directly with [Claude Code](https://claude.ai/code). Once installed, Claude Code will:
 
-### ✨ Features
+- **Detect** your Claude Code chat files automatically
+- **Ask** your preferences through interactive setup
+- **Create** the configuration file for you
+- **Generate** HTML visualizations for all your chats
+- **Build** an interactive dashboard to browse them
+- **Organize** chats by activity (active, short, archived) — if you want
 
-- 🎨 Terminal-style aesthetics inspired by VS Code
-- 🔵 User messages with light blue background
-- 🟢 Assistant responses with light green background
-- 🟠 Collapsible tool results (click to expand)
-- 🔍 Real-time search integration
-- 📱 Responsive design
-- ⚫ Tool use with dark background
-- 💭 Thinking blocks with subtle styling
+No manual configuration needed. Just install the skill and ask Claude Code to visualize your chats.
 
-### 🚀 Quick Start
+### Installation in Claude Code
+
+**Option A: Per-project** (affects only one project)
+
+Copy the skill folder into your project's `.claude/skills/` directory:
 
 ```bash
-python3 scripts/visualizer.py input.json output.html
+# From your project root
+mkdir -p .claude/skills
+cd .claude/skills
+git clone https://github.com/oskar-gm/code-chat-viewer.git
 ```
 
-**Example:**
+**Option B: Global** (affects all your Claude Code projects)
+
+Copy the skill folder into your user-level `.claude/skills/` directory:
+
 ```bash
-python3 scripts/visualizer.py %USERPROFILE%\.claude\chats\chat_12345.json conversation.html
+# Global installation
+mkdir -p ~/.claude/skills
+cd ~/.claude/skills
+git clone https://github.com/oskar-gm/code-chat-viewer.git
 ```
 
-### 📦 Installation
+Then ask Claude Code: *"Visualize my Claude Code chats"* or *"Set up the chat visualizer"*.
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/oskar-gm/cl-code-visualizer.git
-   cd cl-code-visualizer
-   ```
+### How It Works
 
-2. No external dependencies required (Python 3.6+ only)
+1. **First time**: Claude Code reads `SKILL.md`, detects your chat files, asks your preferences, creates `config.json`
+2. **Next times**: Claude Code reads `config.json` and runs the manager — no questions asked
+3. **To update settings**: Ask Claude Code *"Update visualizer config"*
 
-3. Run the script:
-   ```bash
-   python3 scripts/visualizer.py your_chat.json output.html
-   ```
+### Configuration
 
-### 💡 Using as a Claude Skill
+The skill uses two files:
 
-This tool can be used as a [Claude Skill](https://www.claude.com/blog/skills) in Claude.ai for automated conversation visualization.
+| File | Purpose |
+|------|---------|
+| `config.example.json` | Template with defaults (always present, shareable) |
+| `config.json` | Your personalized settings (gitignored, created by Claude Code) |
 
-**Learn more:**
-- [What are Claude Skills?](https://www.claude.com/blog/skills)
-- [How to use Skills in Claude](https://support.claude.com/en/articles/12512180-using-skills-in-claude)
+Configurable options:
 
-**How to use:**
-1. Download the `.zip` file from [Releases](https://github.com/oskar-gm/cl-code-visualizer/releases)
-2. In Claude.ai, go to **Settings > Capabilities > Skills** and upload the `.zip`
-3. In any conversation, ask Claude: "Convert my Claude Code chat to HTML" or "Visualize my conversation log"
-4. Send your JSONL chat file (see [Claude Code File Locations](#-claude-code-file-locations) below)
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Source path | `~/.claude/projects` | Where your JSONL chat files are |
+| Output folder | `~/Code Chat Viewer` | Where HTML files and dashboard are saved |
+| Dashboard filename | `CCV-Dashboard.html` | Name of the interactive index |
+| Agent chats | Included (>3KB) | Include sub-agent conversations |
+| Agent min size | 3 KB | Minimum agent file size to include |
+| Shorts | Enabled | Separate small inactive chats into subfolder |
+| Shorts max size | 40 KB | Maximum HTML size to classify as short |
+| Archive | Enabled | Separate old inactive chats into subfolder |
+| Inactive days | 5 | Days without activity before organizing |
 
-### 📁 File Structure
+### Features
+
+- Terminal-style aesthetics inspired by VS Code
+- User messages with light blue background
+- Assistant responses with light green background
+- Collapsible tool results (click to expand)
+- Real-time conversation filter
+- Responsive fullscreen layout
+- User message navigation (prev/next buttons with position counter)
+- Highlight animation when navigating
+- Security-safe HTML rendering (escaped tool parameters)
+- Interactive dashboard with sortable table, search, and category filters
+- Batch generation with incremental updates (only regenerates changed chats)
+- Configurable chat organization (active, shorts, archived)
+- Dashboard link in every chat for easy navigation back
+- Embedded favicon and header icon (self-contained, no external files needed)
+- Auto-opens dashboard in browser after generation
+- Full interactive setup with all options configurable
+- Scan progress indicator with summary
+- Built-in feedback button
+- Windows-friendly: scripts pause on double-click (no instant close)
+
+### What's New in v2.0
+
+**Features:**
+- Fullscreen edge-to-edge layout (no borders or shadows)
+- User message navigation with prev/next buttons and position counter
+- Scroll synchronization for navigation counter
+- Highlight animation when navigating to a message
+- Local timezone conversion for timestamps
+- Smart output filename generation (Chat YYYY-MM-DD HH-MM hash.html)
+- Stats bar shows chat date instead of generation time
+- Chat Manager: batch generation, organization, and interactive dashboard
+- Full interactive setup: all options configurable with sensible defaults
+- Organized output: Chats/ subfolder with Shorts/ and Archived/ subfolders
+- Embedded favicon (dark, visible on browser tabs) and header icon (light)
+- Auto-opens dashboard in browser after generation
+- Scan progress indicator with file count summary
+- Dashboard navigation: every chat includes a "Back to Dashboard" link
+- Built-in feedback button in header and footer
+- Conversation filter (replaces generic search)
+- Windows double-click support: scripts pause before closing
+- Rebranded from "Claude Code Visualizer" to "Code Chat Viewer"
+
+**Fixes:**
+- Security: HTML-escaped tool_use parameters to prevent DOM injection
+- Filtered out "(no content)" ghost messages from Claude Code internals
+- CSS specificity: User messages correctly display with blue styling
+- Unknown type elements styled correctly within user messages
+- Instant scroll navigation (replaced smooth scrolling)
+- Reduced IntersectionObserver reactivation delay to 100ms
+- Consistent header sizing between chat pages and dashboard
+
+### Manual Usage (without Claude Code)
+
+You do **not** need Claude Code to use this tool. Both scripts work standalone with Python 3.6+.
+
+**Convert a single chat:**
+
+```bash
+python scripts/visualizer.py path/to/chat.jsonl output.html
+```
+
+**Batch generation with dashboard** (requires config.json):
+
+```bash
+# 1. Create your config from the template
+cp config.example.json config.json
+# 2. Edit config.json — set projects_path to your Claude Code projects folder
+# 3. Run the manager
+python scripts/manager.py
+```
+
+On Windows, you can also **double-click** the `.py` files directly. The console window will stay open until you press Enter.
+
+### File Structure
 
 ```
-cl-code-visualizer/
+code-chat-viewer/
 ├── scripts/
-│   └── visualizer.py     # Conversion script
-├── LICENSE               # MIT License
-├── README.md            # This file
-├── CONTRIBUTING.md      # Contribution guidelines
-├── CODE_OF_CONDUCT.md   # Code of conduct
-└── SKILL.md             # Skill documentation for Claude
+│   ├── visualizer.py        # Core: JSONL to HTML converter
+│   └── manager.py           # Orchestrator: batch generation + dashboard
+├── icon.png                 # Project icon (embedded as base64 in output)
+├── config.example.json      # Configuration template
+├── config.json              # Your settings (gitignored, created by setup)
+├── SKILL.md                 # Claude Code skill instructions
+├── README.md                # This file
+├── CONTRIBUTING.md          # Contribution guidelines
+├── CODE_OF_CONDUCT.md       # Code of conduct
+└── LICENSE                  # MIT License
 ```
 
-### 🎓 How It Works
+### Output Structure
 
-The script reads JSONL (JSON Lines) files generated by Claude Code and transforms them into styled HTML with:
+```
+~/Code Chat Viewer/              # Output root (configurable)
+├── CCV-Dashboard.html           # Interactive dashboard
+└── Chats/                       # Generated HTML files
+    ├── Chat 2026-01-30 ...html  # Active chats
+    ├── Shorts/                  # Small inactive chats (if enabled)
+    └── Archived/                # Old inactive chats (if enabled)
+```
 
-1. **Intelligent parsing** of different message types
-2. **Visual categorization** by type (user, assistant, tool use, tool result)
-3. **Interactive format** with collapsible tool results
-4. **Functional search** to filter messages
-
-### 📍 Claude Code File Locations
+### Claude Code File Locations
 
 Claude Code stores chat logs in JSONL format at:
 
-- **Windows:** `%USERPROFILE%\.claude\chats\` or `%USERPROFILE%\.claude\projects\`
-- **Linux/Mac:** `~/.claude/chats/` or `~/.claude/projects/`
+- **Windows:** `%USERPROFILE%\.claude\projects\` or `%USERPROFILE%\.claude\chats\`
+- **Linux/Mac:** `~/.claude/projects/` or `~/.claude/chats/`
 
-Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678.json`)
+Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678.jsonl`)
 
-### 🎨 Visual Styling
+### Visual Styling
 
 - **User messages**: Blue (`#0066CC`) with light blue background (`#F8FBFF`)
 - **Assistant messages**: Green (`#10893E`) with light green background (`#FAFFF8`)
@@ -116,158 +212,228 @@ Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678
 - **Thinking blocks**: White background with subtle gray border and shadow
 - **Tool use blocks**: Dark gray (`#48484A`) with light text (`#E8E8E8`)
 
-### 📊 Example Output
-
-```
-📖 Reading chat.json...
-✅ 73 lines parsed
-🔄 Generating HTML in terminal style...
-✅ HTML generated successfully: output.html
-📊 Statistics:
-   - Total lines processed: 73
-   - User messages: 5
-   - Assistant messages: 38
-   - Tool Results: 14
-```
-
-### 🤝 Contributing
+### Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
-### 📄 License
+### License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 **Attribution Requirements:**
 - Keep the LICENSE file intact
 - Credit the original author: Óscar González Martín
-- Link to the original repository: https://github.com/oskar-gm/cl-code-visualizer
+- Link to the original repository: https://github.com/oskar-gm/code-chat-viewer
 - State any modifications made
 
-### 👤 Author
+### Author
 
 **Óscar González Martín**
-- 🌐 Website: [nucleoia.es](https://nucleoia.es)
-- 📧 Email: oscar@nucleoia.es
-- 💼 GitHub: [@oskar-gm](https://github.com/oskar-gm)
-- 🔗 LinkedIn: [oscar-gonz](https://linkedin.com/in/oscar-gonz)
+- Website: [nucleoia.es](https://nucleoia.es)
+- Email: oscar@nucleoia.es
+- GitHub: [@oskar-gm](https://github.com/oskar-gm)
+- LinkedIn: [oscar-gonz](https://linkedin.com/in/oscar-gonz)
 
-### 🌟 Support
+### Support
 
 If you find this project useful, please:
-- ⭐ Star the repository
-- 🐛 Report bugs via [Issues](https://github.com/oskar-gm/cl-code-visualizer/issues)
-- 💡 Suggest improvements
-- 🔄 Share with others
+- Star the repository
+- Report bugs via [Issues](https://github.com/oskar-gm/code-chat-viewer/issues)
+- Suggest improvements
+- Share with others
 
-### 📞 Contact
+### Contact
 
 For questions, suggestions, or bug reports:
 - **Email:** oscar@nucleoia.es
-- **GitHub Issues:** [Report here](https://github.com/oskar-gm/cl-code-visualizer/issues)
+- **GitHub Issues:** [Report here](https://github.com/oskar-gm/code-chat-viewer/issues)
 
 ---
 
 <a name="español"></a>
-## 🇪🇸 Español
+## Español
 
-## 📥 Descarga Rápida
+### Compatibilidad directa con Claude Code
 
-**Última versión:** [⬇️ Descargar última](https://github.com/oskar-gm/cl-code-visualizer/releases/latest) - Siempre actualizada
+**Claude Code lo hace todo por ti.** Esta skill está diseñada para funcionar directamente con [Claude Code](https://claude.ai/code). Una vez instalada, Claude Code:
 
-**Versión 1.0:** [⬇️ Descargar v1.0.zip](https://github.com/oskar-gm/cl-code-visualizer/archive/refs/tags/v1.0.zip) - Release estable
+- **Detecta** tus archivos de chat de Claude Code automáticamente
+- **Pregunta** tus preferencias mediante un setup interactivo
+- **Crea** el archivo de configuración por ti
+- **Genera** visualizaciones HTML de todos tus chats
+- **Construye** un panel interactivo para navegarlos
+- **Organiza** los chats por actividad (activos, cortos, archivados) — si quieres
 
-O navega por todos los [Releases](https://github.com/oskar-gm/cl-code-visualizer/releases)
+Sin configuración manual. Solo instala la skill y pide a Claude Code que visualice tus chats.
 
----
+### Instalación en Claude Code
 
-### Descripción
+**Opción A: Por proyecto** (afecta solo a un proyecto)
 
-Skill profesional para convertir archivos JSON de chats de Claude Code (terminal de VS Code) en visualizaciones HTML con formato consistente y estético.
-
-### ✨ Características
-
-- 🎨 Estética estilo terminal inspirada en VS Code
-- 🔵 Mensajes de usuario con fondo azul claro
-- 🟢 Respuestas del asistente con fondo verde claro
-- 🟠 Resultados de herramientas colapsables (click para expandir)
-- 🔍 Búsqueda en tiempo real integrada
-- 📱 Diseño responsive
-- ⚫ Tool use con fondo oscuro
-- 💭 Bloques de pensamiento con estilo sutil
-
-### 🚀 Inicio Rápido
+Copia la carpeta de la skill en el directorio `.claude/skills/` de tu proyecto:
 
 ```bash
-python3 scripts/visualizer.py entrada.json salida.html
+# Desde la raíz de tu proyecto
+mkdir -p .claude/skills
+cd .claude/skills
+git clone https://github.com/oskar-gm/code-chat-viewer.git
 ```
 
-**Ejemplo:**
+**Opción B: Global** (afecta a todos tus proyectos de Claude Code)
+
+Copia la carpeta de la skill en tu directorio `.claude/skills/` a nivel de usuario:
+
 ```bash
-python3 scripts/visualizer.py %USERPROFILE%\.claude\chats\chat_12345.json conversacion.html
+# Instalación global
+mkdir -p ~/.claude/skills
+cd ~/.claude/skills
+git clone https://github.com/oskar-gm/code-chat-viewer.git
 ```
 
-### 📦 Instalación
+Luego pide a Claude Code: *"Visualiza mis chats de Claude Code"* o *"Configura el visualizador de chats"*.
 
-1. Clona este repositorio:
-   ```bash
-   git clone https://github.com/oskar-gm/cl-code-visualizer.git
-   cd cl-code-visualizer
-   ```
+### Cómo funciona
 
-2. No requiere dependencias externas (solo Python 3.6+)
+1. **Primera vez**: Claude Code lee `SKILL.md`, detecta tus archivos de chat, pregunta tus preferencias, crea `config.json`
+2. **Siguientes veces**: Claude Code lee `config.json` y ejecuta el manager — sin preguntas
+3. **Para cambiar ajustes**: Pide a Claude Code *"Actualiza la configuración del visualizador"*
 
-3. Ejecuta el script:
-   ```bash
-   python3 scripts/visualizer.py tu_chat.json salida.html
-   ```
+### Configuración
 
-### 💡 Usar como Skill de Claude
+La skill usa dos archivos:
 
-Esta herramienta puede usarse como [Skill de Claude](https://www.claude.com/blog/skills) en Claude.ai para visualización automática de conversaciones.
+| Archivo | Propósito |
+|---------|-----------|
+| `config.example.json` | Plantilla con valores por defecto (siempre presente, compartible) |
+| `config.json` | Tu configuración personalizada (en gitignore, creada por Claude Code) |
 
-**Aprende más:**
-- [¿Qué son los Skills de Claude?](https://www.claude.com/blog/skills)
-- [Cómo usar Skills en Claude](https://support.claude.com/es/articles/12512180-uso-de-skills-en-claude)
+Opciones configurables:
 
-**Cómo usar:**
-1. Descarga el archivo `.zip` desde [Releases](https://github.com/oskar-gm/cl-code-visualizer/releases)
-2. En Claude.ai, ve a **Ajustes > Capacidades > Skills** y sube el `.zip`
-3. En cualquier conversación, pídele a Claude: "Convierte mi chat de Claude Code a HTML" o "Visualiza mi registro de conversación"
-4. Envía tu archivo JSONL del chat (ver [Ubicación de Archivos de Claude Code](#-ubicación-de-archivos-de-claude-code) más abajo)
+| Ajuste | Por defecto | Descripción |
+|--------|-------------|-------------|
+| Ruta origen | `~/.claude/projects` | Dónde están tus archivos JSONL |
+| Carpeta de salida | `~/Code Chat Viewer` | Dónde se guardan los HTML y el panel |
+| Nombre del panel | `CCV-Dashboard.html` | Nombre del archivo índice interactivo |
+| Chats de agentes | Incluidos (>3KB) | Incluir conversaciones de sub-agentes |
+| Tamaño mín. agente | 3 KB | Tamaño mínimo de agente para incluir |
+| Shorts | Activado | Separar chats pequeños inactivos en subcarpeta |
+| Tamaño máx. short | 40 KB | Tamaño máximo de HTML para clasificar como short |
+| Archivo | Activado | Separar chats inactivos antiguos en subcarpeta |
+| Días de inactividad | 5 | Días sin actividad antes de organizar |
 
-### 📁 Estructura de Archivos
+### Características
+
+- Estética estilo terminal inspirada en VS Code
+- Mensajes de usuario con fondo azul claro
+- Respuestas del asistente con fondo verde claro
+- Resultados de herramientas colapsables (clic para expandir)
+- Filtro de conversación en tiempo real
+- Layout fullscreen responsive
+- Navegación por mensajes de usuario (botones prev/next con contador)
+- Animación de resaltado al navegar
+- Renderizado HTML seguro (parámetros de herramientas escapados)
+- Panel interactivo con tabla ordenable, búsqueda y filtros por categoría
+- Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
+- Organización configurable de chats (activos, cortos, archivados)
+- Enlace al panel en cada chat para volver fácilmente
+- Favicon e icono de cabecera embebidos (autocontenido, sin archivos externos)
+- Apertura automática del panel en el navegador tras la generación
+- Setup interactivo completo con todas las opciones configurables
+- Indicador de progreso del escaneo con resumen
+- Botón de feedback integrado
+- Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+
+### Novedades en v2.0
+
+**Funcionalidades:**
+- Layout fullscreen edge-to-edge sin bordes ni sombras
+- Navegación por mensajes de usuario con botones prev/next y contador de posición
+- Sincronización de scroll para el contador de navegación
+- Animación de resaltado al navegar a un mensaje
+- Conversión a zona horaria local para timestamps
+- Generación inteligente de nombres de archivo (Chat YYYY-MM-DD HH-MM hash.html)
+- La barra de estadísticas muestra fecha del chat en lugar de la de generación
+- Chat Manager: generación por lotes, organización y panel interactivo
+- Setup interactivo completo: todas las opciones configurables con defaults razonables
+- Salida organizada: subcarpeta Chats/ con subcarpetas Shorts/ y Archived/
+- Favicon embebido (oscuro, visible en pestañas del navegador) e icono de cabecera (claro)
+- Apertura automática del panel en el navegador tras la generación
+- Indicador de progreso del escaneo con resumen de archivos
+- Navegación al panel: cada chat incluye un enlace "Volver al Dashboard"
+- Botón de feedback integrado en encabezado y pie de página
+- Filtro de conversación (reemplaza búsqueda genérica)
+- Soporte para doble clic en Windows: los scripts se pausan antes de cerrarse
+- Renombrado de "Claude Code Visualizer" a "Code Chat Viewer"
+
+**Correcciones:**
+- Seguridad: parámetros de tool_use escapados en HTML para prevenir inyección DOM
+- Filtrado de mensajes fantasma "(no content)" de los internos de Claude Code
+- Especificidad CSS: los mensajes de usuario se muestran correctamente en azul
+- Estilos de tipos desconocidos corregidos dentro de mensajes de usuario
+- Navegación instantánea (reemplazado smooth scrolling)
+- Delay de reactivación de IntersectionObserver reducido a 100ms
+- Tamaño de encabezado consistente entre las páginas de chat y el panel
+
+### Uso manual (sin Claude Code)
+
+**No** necesitas Claude Code para usar esta herramienta. Ambos scripts funcionan de forma independiente con Python 3.6+.
+
+**Convertir un chat individual:**
+
+```bash
+python scripts/visualizer.py ruta/al/chat.jsonl salida.html
+```
+
+**Generación por lotes con panel** (requiere config.json):
+
+```bash
+# 1. Crear tu configuración desde la plantilla
+cp config.example.json config.json
+# 2. Editar config.json — configurar projects_path con la carpeta de proyectos de Claude Code
+# 3. Ejecutar el manager
+python scripts/manager.py
+```
+
+En Windows, también puedes hacer **doble clic** en los archivos `.py` directamente. La ventana de consola permanecerá abierta hasta que pulses Enter.
+
+### Estructura de archivos
 
 ```
-cl-code-visualizer/
+code-chat-viewer/
 ├── scripts/
-│   └── visualizer.py     # Script de conversión
-├── LICENSE               # Licencia MIT
-├── README.md            # Este archivo
-├── CONTRIBUTING.md      # Guía de contribución
-├── CODE_OF_CONDUCT.md   # Código de conducta
-└── SKILL.md             # Documentación del skill para Claude
+│   ├── visualizer.py        # Core: conversor JSONL a HTML
+│   └── manager.py           # Orquestador: generación por lotes + panel
+├── icon.png                 # Icono del proyecto (embebido como base64 en la salida)
+├── config.example.json      # Plantilla de configuración
+├── config.json              # Tu configuración (en gitignore, creada por setup)
+├── SKILL.md                 # Instrucciones de la skill para Claude Code
+├── README.md                # Este archivo
+├── CONTRIBUTING.md          # Guía de contribución
+├── CODE_OF_CONDUCT.md       # Código de conducta
+└── LICENSE                  # Licencia MIT
 ```
 
-### 🎓 Cómo Funciona
+### Estructura de salida
 
-El script lee archivos JSONL (JSON Lines) generados por Claude Code y los transforma en HTML estilizado con:
+```
+~/Code Chat Viewer/              # Raíz de salida (configurable)
+├── CCV-Dashboard.html           # Panel interactivo
+└── Chats/                       # Archivos HTML generados
+    ├── Chat 2026-01-30 ...html  # Chats activos
+    ├── Shorts/                  # Chats pequeños inactivos (si está activado)
+    └── Archived/                # Chats inactivos antiguos (si está activado)
+```
 
-1. **Parsing inteligente** de diferentes tipos de mensajes
-2. **Categorización visual** por tipo (usuario, asistente, tool use, tool result)
-3. **Formato interactivo** con resultados de herramientas colapsables
-4. **Búsqueda funcional** para filtrar mensajes
-
-### 📍 Ubicación de Archivos de Claude Code
+### Ubicación de archivos de Claude Code
 
 Claude Code almacena los logs de chat en formato JSONL en:
 
-- **Windows:** `%USERPROFILE%\.claude\chats\` o `%USERPROFILE%\.claude\projects\`
-- **Linux/Mac:** `~/.claude/chats/` o `~/.claude/projects/`
+- **Windows:** `%USERPROFILE%\.claude\projects\` o `%USERPROFILE%\.claude\chats\`
+- **Linux/Mac:** `~/.claude/projects/` o `~/.claude/chats/`
 
-Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def012345678.json`)
+Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def012345678.jsonl`)
 
-### 🎨 Estilo Visual
+### Estilo visual
 
 - **Mensajes de usuario**: Azul (`#0066CC`) con fondo azul claro (`#F8FBFF`)
 - **Mensajes del asistente**: Verde (`#10893E`) con fondo verde claro (`#FAFFF8`)
@@ -275,56 +441,45 @@ Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def01234
 - **Bloques de pensamiento**: Fondo blanco con borde gris sutil y sombra
 - **Bloques tool use**: Gris oscuro (`#48484A`) con texto claro (`#E8E8E8`)
 
-### 📊 Ejemplo de Salida
+### Contribuir
 
-```
-📖 Leyendo chat.json...
-✅ 73 líneas parseadas
-🔄 Generando HTML en estilo terminal...
-✅ HTML generado exitosamente: salida.html
-📊 Estadísticas:
-   - Total líneas procesadas: 73
-   - Mensajes de usuario: 5
-   - Mensajes del asistente: 38
-   - Resultados de herramientas: 14
-```
+Las contribuciones son bienvenidas. Por favor lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre nuestro código de conducta y el proceso para enviar pull requests.
 
-### 🤝 Contribuir
-
-¡Las contribuciones son bienvenidas! Por favor lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre nuestro código de conducta y el proceso para enviar pull requests.
-
-### 📄 Licencia
+### Licencia
 
 Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para más detalles.
 
-**Requisitos de Atribución:**
+**Requisitos de atribución:**
 - Mantener el archivo LICENSE intacto
 - Acreditar al autor original: Óscar González Martín
-- Enlazar al repositorio original: https://github.com/oskar-gm/cl-code-visualizer
+- Enlazar al repositorio original: https://github.com/oskar-gm/code-chat-viewer
 - Indicar cualquier modificación realizada
 
-### 👤 Autor
+### Autor
 
 **Óscar González Martín**
-- 🌐 Sitio web: [nucleoia.es](https://nucleoia.es)
-- 📧 Email: oscar@nucleoia.es
-- 💼 GitHub: [@oskar-gm](https://github.com/oskar-gm)
-- 🔗 LinkedIn: [oscar-gonz](https://linkedin.com/in/oscar-gonz)
+- Sitio web: [nucleoia.es](https://nucleoia.es)
+- Email: oscar@nucleoia.es
+- GitHub: [@oskar-gm](https://github.com/oskar-gm)
+- LinkedIn: [oscar-gonz](https://linkedin.com/in/oscar-gonz)
 
-### 🌟 Apoyo
+### Apoyo
 
 Si este proyecto te resulta útil, por favor:
-- ⭐ Dale una estrella al repositorio
-- 🐛 Reporta bugs via [Issues](https://github.com/oskar-gm/cl-code-visualizer/issues)
-- 💡 Sugiere mejoras
-- 🔄 Compártelo con otros
+- Dale una estrella al repositorio
+- Reporta bugs vía [Issues](https://github.com/oskar-gm/code-chat-viewer/issues)
+- Sugiere mejoras
+- Compártelo con otros
 
-### 📞 Contacto
+### Contacto
 
 Para preguntas, sugerencias o reportar bugs:
 - **Email:** oscar@nucleoia.es
-- **GitHub Issues:** [Reportar aquí](https://github.com/oskar-gm/cl-code-visualizer/issues)
+- **GitHub Issues:** [Reportar aquí](https://github.com/oskar-gm/code-chat-viewer/issues)
 
 ---
 
-**© 2025 Óscar González Martín. All rights reserved under MIT License.**
+**© 2025-2026 Óscar González Martín. All rights reserved under MIT License.**
+
+<!-- SEO: keywords for discoverability -->
+<!-- claude code chat viewer, claude code conversation export, JSONL to HTML converter, AI chat visualization, claude code log viewer, export claude code chats, claude code chat to HTML, AI conversation viewer, code assistant chat export, VS Code chat export, claude code skill, anthropic claude chat logs, AI coding assistant history, chat log visualizer, developer chat export tool -->
