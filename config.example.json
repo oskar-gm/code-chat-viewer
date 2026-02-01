@@ -1,0 +1,30 @@
+{
+  "_readme": "Code Chat Viewer - Configuration Template. Copy as config.json and customize, or let Claude Code set it up for you interactively.",
+
+  "source": {
+    "projects_path": "~/.claude/projects"
+  },
+
+  "output": {
+    "folder": "~/Code Chat Viewer",
+    "index_filename": "CCV-Dashboard.html"
+  },
+
+  "agents": {
+    "include": true,
+    "min_size_kb": 3
+  },
+
+  "inactive_days": 5,
+
+  "shorts": {
+    "enabled": true,
+    "folder": "Shorts",
+    "max_size_kb": 40
+  },
+
+  "archive": {
+    "enabled": true,
+    "folder": "Archived"
+  }
+}

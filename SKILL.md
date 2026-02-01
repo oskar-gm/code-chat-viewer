@@ -1,264 +1,202 @@
 ---
-name: cl-code-visualizer
-description: Convert Claude Code, VS Code, and Visual Studio Code chat JSON files (JSONL format) into professional HTML visualizations. Use when users need to visualize, view, export, or convert Claude Code conversation logs (.claude/chats/, .claude/projects/) into readable HTML with terminal-style aesthetics, syntax highlighting, collapsible tool results, and search functionality. Handles chat exports, conversation logs, JSONL files, and Claude AI chat history.
+name: code-chat-viewer
+description: Claude Code skill for converting chat JSONL files into professional HTML visualizations with an interactive dashboard. Handles setup, configuration, batch generation, and organization of Claude Code conversation logs. Fully automated — Claude Code configures, generates, and manages everything.
 license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
-  repository: https://github.com/oskar-gm/cl-code-visualizer
-  version: 1.0
-  keywords: claude-code, vs-code, visual-studio-code, chat-visualization, jsonl-converter, html-export, conversation-logs, chat-export, terminal-ui, developer-tools
-  tags: claude-ai, vscode, visual-studio, chat-logs, json-converter, ai-tools, conversation-export
+  repository: https://github.com/oskar-gm/code-chat-viewer
+  version: 2.0
+  keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
+  tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
 
-# Claude Code Visualizer
+# Code Chat Viewer — Skill Instructions
 
-Convert Claude Code chat JSON files into formatted HTML visualizations with professional terminal-style aesthetics.
+This file contains operational instructions for Claude Code. When this skill is loaded, follow the workflows below to help the user configure, generate, and manage their Claude Code chat visualizations.
 
-## Quick Start
+## Overview
 
-Convert a Claude Code chat JSON to HTML:
+This skill provides two scripts:
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/visualizer.py` | Core converter: single JSONL file to single HTML |
+| `scripts/manager.py` | Orchestrator: batch scan, generate, organize, and create dashboard |
+
+The manager reads `config.json` for all paths and settings. If it does not exist, guide the user through interactive setup.
+
+## Workflow: First-Time Setup
+
+When the user wants to use this skill and `config.json` does not exist:
+
+### Step 1: Detect source path
+
+Look for Claude Code chat files automatically:
+
+- **Windows**: `%USERPROFILE%\.claude\projects\`
+- **Linux/Mac**: `~/.claude/projects/`
+
+Verify the path exists and contains project subdirectories with `.jsonl` files. If not found, ask the user for the correct path.
+
+### Step 2: Ask configuration questions
+
+Ask these questions interactively (suggest defaults in parentheses):
+
+1. **Output folder**: "Where should the generated HTML files be saved?"
+   - Default: `~/Code Chat Viewer`
+   - Dashboard is saved at the root; chats go into a `Chats/` subfolder
+
+2. **Dashboard filename**: "What name for the dashboard file?"
+   - Default: `CCV-Dashboard.html`
+
+3. **Agent chats**: "Include agent sub-chats? (yes/no)"
+   - Default: yes
+   - If yes: "Minimum agent file size in KB?" (default: 3)
+
+4. **Inactive days**: "Days of inactivity before organizing?"
+   - Default: 5
+
+5. **Shorts management**: "Automatically separate small inactive chats into a subfolder? (yes/no)"
+   - Default: yes
+   - If yes: "Maximum size in KB to classify as short?" (default: 40)
+
+6. **Archive management**: "Automatically archive large inactive chats? (yes/no)"
+   - Default: yes
+
+### Step 3: Create config.json
+
+Generate `config.json` from the user's answers. Use the structure in `config.example.json` as template. Place it in the skill's root folder.
+
+### Step 4: Run first generation
+
+Execute: `python scripts/manager.py`
+
+Report the results to the user.
+
+## Workflow: Regular Usage
+
+When `config.json` already exists:
+
+1. Execute: `python scripts/manager.py`
+2. Report results (new, updated, unchanged, organized, dashboard stats)
+3. Inform the user where the dashboard file is located
+
+## Workflow: Update Configuration
+
+When the user wants to change settings:
+
+1. Read current `config.json`
+2. Show current configuration
+3. Ask what they want to change
+4. Update `config.json`
+5. Re-run the manager if needed
+
+## Workflow: Single Chat Conversion
+
+When the user wants to convert a single JSONL file:
 
 ```bash
-python3 scripts/visualizer.py <input.json> <output.html>
+python scripts/visualizer.py <input.jsonl> [output.html]
 ```
 
-**Example (Windows):**
-```bash
-python3 scripts/visualizer.py %USERPROFILE%\.claude\chats\chat_12345.json conversation.html
-```
-
-**Example (Linux/Mac):**
-```bash
-python3 scripts/visualizer.py ~/.claude/chats/chat_12345.json conversation.html
-```
-
-## What This Skill Does
-
-Transforms raw Claude Code conversation logs (JSONL format) into readable, styled HTML documents with:
-
-- **Terminal aesthetics**: Professional monospace styling with VS Code-inspired colors
-- **Message categorization**: User messages (blue), Assistant responses (green), Tool results (orange)
-- **Collapsible tool results**: Click to expand/collapse detailed tool outputs
-- **Syntax highlighting**: Code blocks with proper formatting
-- **Thinking blocks**: Italicized, subtle styling for internal reasoning
-- **Tool use blocks**: Dark-themed blocks for function calls
-- **Search functionality**: Built-in search bar to filter messages
-- **Responsive layout**: Adapts to different screen sizes
+If no output filename is provided, the script generates one automatically with format `Chat YYYY-MM-DD HH-MM hash.html`.
 
 ## File Locations
 
-Claude Code stores chat logs in JSONL format at:
+Claude Code stores chat logs at:
 
-**Windows:**
-- `%USERPROFILE%\.claude\chats\`
-- `%USERPROFILE%\.claude\projects\`
+- **Windows**: `%USERPROFILE%\.claude\projects\` and `%USERPROFILE%\.claude\chats\`
+- **Linux/Mac**: `~/.claude/projects/` and `~/.claude/chats/`
 
-**Linux/Mac:**
-- `~/.claude/chats/`
-- `~/.claude/projects/`
+Each project subdirectory contains:
+- `*.jsonl` — Main chat files (UUID-named)
+- `agent-*.jsonl` — Agent sub-chat files
+- `sessions-index.json` — Rich metadata (name, summary, message count, git branch)
 
-Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678.json`)
+## Configuration Reference
 
-## Input Format
+`config.json` fields:
 
-The script expects **JSONL (JSON Lines)** format where each line is a valid JSON object representing a message or event in the conversation. This is the standard format for Claude Code chat logs.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `source.projects_path` | string | `~/.claude/projects` | Directory with Claude Code JSONL files |
+| `output.folder` | string | `~/Code Chat Viewer` | Root folder for output (dashboard + Chats/ subfolder) |
+| `output.index_filename` | string | `CCV-Dashboard.html` | Dashboard filename |
+| `agents.include` | bool | `true` | Include agent sub-chat files |
+| `agents.min_size_kb` | int | `3` | Minimum agent file size to include (KB) |
+| `inactive_days` | int | `5` | Days without activity before organizing |
+| `shorts.enabled` | bool | `true` | Separate small inactive chats |
+| `shorts.folder` | string | `Shorts` | Subfolder name for short chats |
+| `shorts.max_size_kb` | int | `40` | Max HTML size to classify as short (KB) |
+| `archive.enabled` | bool | `true` | Separate old inactive chats |
+| `archive.folder` | string | `Archived` | Subfolder name for archived chats |
 
-Example JSONL structure:
-```json
-{"role":"user","content":"Hello","created_at":"2025-11-08T10:00:00Z","uuid":"abc123"}
-{"role":"assistant","content":"Hi!","created_at":"2025-11-08T10:00:01Z","uuid":"def456"}
-```
+## Dashboard Features
 
-## Output Format
+The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
-The generated HTML includes:
+- **Sortable table**: Click column headers to sort (default: last used, descending)
+- **Filter**: Filter by text across all columns
+- **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
+- **Optional columns**: UUID, Branch, Size, First Prompt (toggle with checkboxes)
+- **Direct links**: Icon to open each chat HTML file
+- **Enriched data**: Uses `sessions-index.json` for name, summary, message count, git branch
+- **Feedback button**: Highlighted in header, also in footer
 
-1. **Header section**: Chat title, timestamp, and metadata
-2. **Search bar**: Real-time message filtering
-3. **Message stream**: Chronologically ordered conversation
-4. **Statistics footer**: Message counts and processing info
-5. **Author signature**: Attribution comment in HTML source
+## Chat Page Features
 
-### Message Types Handled
+Each generated chat HTML includes:
 
-- **User messages**: Questions and commands from the user
-- **Assistant messages**: AI responses with formatting
-- **Tool uses**: Function calls with parameters
-- **Tool results**: Command outputs (collapsible by default)
-- **Thinking blocks**: Internal reasoning process
-- **Summaries**: Conversation context summaries
-- **Snapshots**: Conversation state markers
+- **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
+- **Conversation filter**: Filter messages by text content
+- **User message navigation**: Prev/next buttons with position counter and scroll sync
+- **Feedback button**: In header (highlighted) and footer
+- **Collapsible tool results**: Click to expand/collapse
 
-## Usage Patterns
+## Chat Categories
 
-### Basic Conversion
+| Category | Criteria | Location |
+|----------|----------|----------|
+| **Active** | Used within `inactive_days` | `Chats/` folder |
+| **Short** | HTML < `shorts.max_size_kb` + inactive | `Chats/Shorts/` subfolder |
+| **Archived** | Inactive for `inactive_days`+ | `Chats/Archived/` subfolder |
 
-```bash
-python3 scripts/visualizer.py chat.json output.html
-```
+## Troubleshooting
 
-### With Full Paths (Windows)
+### "config.json not found"
+Run the setup workflow (Step 1-4 above) to create the configuration.
 
-```bash
-python3 scripts/visualizer.py %USERPROFILE%\.claude\chats\c5f2a3e1-1234-5678.json %USERPROFILE%\Documents\chat.html
-```
+### "Source path does not exist"
+The configured `source.projects_path` is wrong. Update it in `config.json` or re-run setup.
 
-### With Full Paths (Linux/Mac)
+### Empty dashboard
+The source directory may not contain any JSONL files, or the output folder has no generated HTMLs yet. Run the manager first.
 
-```bash
-python3 scripts/visualizer.py ~/.claude/chats/c5f2a3e1-1234-5678.json ~/Documents/chat.html
-```
-
-### Batch Processing Multiple Chats (Windows PowerShell)
-
-```powershell
-Get-ChildItem "$env:USERPROFILE\.claude\chats\*.json" | ForEach-Object {
-    python3 scripts/visualizer.py $_.FullName "$($_.BaseName).html"
-}
-```
-
-### Batch Processing Multiple Chats (Linux/Mac)
-
-```bash
-for chat in ~/.claude/chats/*.json; do
-    python3 scripts/visualizer.py "$chat" "$(basename "$chat" .json).html"
-done
-```
-
-## Visual Styling Details
-
-### Color Scheme
-
-- **User messages**: Blue (`#0066CC`) with light blue background (`#F8FBFF`)
-- **Assistant messages**: Green (`#10893E`) with light green background (`#FAFFF8`)
-- **Tool results**: Orange (`#FF6B00`) with gray background (`#F8F8F8`)
-- **Thinking blocks**: White background with subtle gray border and shadow (`#B8C8B8`)
-- **Tool use blocks**: Dark gray (`#48484A`) with light text (`#E8E8E8`)
-
-### Interactive Features
-
-- **Collapsible tool results**: Click the header to expand/collapse
-- **Search highlighting**: Matching messages shown, others hidden
-- **Responsive bullets**: Size 20px with color-coded by message type
-- **Smooth scrolling**: Auto-scroll to top on page load
-
-### Typography
-
-- **Font family**: Cascadia Code, Consolas, Monaco, monospace
-- **Bullet size**: 20px
-- **Label size**: 17px (user/assistant), 15px (general)
-- **Content size**: 14px with line-height 1.7
-
-## Technical Notes
-
-### Processing Statistics
-
-After conversion, the script displays:
-- Total lines processed
-- Count by message type (user, assistant, tool results, etc.)
-- HTML elements generated
-- Output file location
-
-### Error Handling
-
-- **Invalid JSON lines**: Logged with line number, processing continues
-- **Missing fields**: Uses sensible defaults (e.g., "N/A" for missing IDs)
-- **Empty content**: Displays "(empty)" placeholder
-
-### Attribution in Output
-
-All generated HTML files include an invisible comment with:
-- Author information (Óscar González Martín)
-- Repository link (https://github.com/oskar-gm/cl-code-visualizer)
-- License information (MIT License)
-- Generation timestamp
-
-This ensures proper attribution while not affecting the visual output.
-
-## When to Use This Skill
-
-Trigger this skill when users want to:
-- **Visualize** Claude Code conversations as HTML
-- **Convert** chat.json or JSONL files to HTML format
-- **Export** Claude Code conversation logs for sharing or archiving
-- **View** chat history from VS Code Claude Code in a readable format
-- **Transform** .claude/chats/ or .claude/projects/ files into HTML visualizations
-
-**Example user requests:**
-- "Convert my Claude Code chat to HTML"
-- "Visualize this chat.json file"
-- "Export my VS Code Claude conversation"
-- "Make this JSONL conversation readable"
-
-## Script Output
-
-Upon successful conversion, the script prints:
-```
-📖 Reading <input-file>...
-✅ X lines parsed
-🔄 Generating HTML in terminal style...
-✅ HTML generated successfully: <output-file>
-📊 Statistics:
-   - Total lines processed: X
-   - User messages: X
-   - Assistant messages: X
-   - Tool Results: X
-   - Summaries: X
-   - Snapshots: X
-   - HTML elements generated: X
-
-🎉 Conversion completed!
-📁 Open file: <output-file>
-```
+### Missing enriched data (? icon in Msgs column)
+Some chats lack metadata in `sessions-index.json`. This is normal for old chats, agent chats, or recently active sessions not yet indexed by Claude Code.
 
 ## Requirements
 
 - **Python**: 3.6 or higher
-- **Dependencies**: None (uses only Python standard library)
-- **Operating System**: Windows, Linux, macOS
-- **Browser**: Any modern browser (Chrome, Firefox, Safari, Edge)
+- **Dependencies**: None (Python standard library only)
+- **OS**: Windows, Linux, macOS
 
-## Best Practices
+## Technical Notes
 
-1. **Keep original JSON**: Always maintain the source .json file
-2. **Descriptive names**: Use meaningful output filenames (e.g., `project_x_chat_2025-11-08.html`)
-3. **Regular exports**: Convert important conversations for archival
-4. **Browser viewing**: Open HTML files in any modern browser for best experience
-5. **Sharing conversations**: HTML format is ideal for sharing with non-technical stakeholders
+- The manager imports functions from `visualizer.py` (same directory): `parse_chat_json`, `generate_html`, `get_chat_timestamp`, `generate_output_filename`, `ICON_BASE64`, `ICON_FAVICON_BASE64`
+- HTML generation is deterministic: same JSONL input produces same HTML output
+- The manager only regenerates an HTML if the source JSONL is newer than the existing HTML
+- Organization (shorts/archive) uses the JSONL modification time as "last used" indicator, not the HTML generation time
+- Dashboard links in chat pages are automatically adjusted for subfolder depth (`../` or `../../`)
+- Favicon uses a dark icon (visible on white browser tabs); header uses a light icon (visible on dark header)
+- Both icons are embedded as base64 — no external files needed
+- The manager auto-opens the dashboard in the browser after generation (interactive mode only)
+- "(no content)" placeholder messages from Claude Code internals are automatically filtered out
+- Scripts can be run manually without Claude Code — they pause before closing on Windows (double-click compatible)
 
-## Limitations
+## Attribution
 
-- Processes one chat file at a time
-- Output is static HTML (no server-side processing)
-- Requires local file access (cannot process remote URLs directly)
-- Large conversations (1000+ messages) may take a few seconds to render
-
-## Troubleshooting
-
-### Issue: "File not found"
-**Solution**: Check the path to your JSON file. Use full paths with `%USERPROFILE%` (Windows) or `~` (Linux/Mac).
-
-### Issue: "Invalid JSON"
-**Solution**: Ensure the file is in JSONL format (one JSON object per line). Check for corrupted lines.
-
-### Issue: "Tool results not collapsing"
-**Solution**: Ensure JavaScript is enabled in your browser. Try opening in a different browser.
-
-### Issue: "Search not working"
-**Solution**: The search function requires JavaScript. Make sure it's not blocked by browser extensions.
-
-## Support
-
-For questions, issues, or contributions:
-- **Repository**: https://github.com/oskar-gm/cl-code-visualizer
-- **Issues**: https://github.com/oskar-gm/cl-code-visualizer/issues
-- **Email**: oscar@nucleoia.es
-- **Website**: https://nucleoia.es
-
-## License
-
-This project is licensed under the MIT License. See LICENSE file for details.
-
-**Author**: Óscar González Martín
-**Version**: 1.0
-**Last Updated**: November 2025
+Author: Óscar González Martín
+Repository: https://github.com/oskar-gm/code-chat-viewer
+License: MIT
+Version: 2.0

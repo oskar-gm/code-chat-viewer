@@ -1,4 +1,4 @@
-# Contributing to Claude Code Visualizer
+# Contributing to Code Chat Viewer
 
 **[English](#english)** | **[Español](#español)**
 
@@ -7,7 +7,7 @@
 <a name="english"></a>
 ## 🇬🇧 English
 
-First off, thank you for considering contributing to Claude Code Visualizer! It's people like you that make this tool better for everyone.
+First off, thank you for considering contributing to Code Chat Viewer! It's people like you that make this tool better for everyone.
 
 ### Table of Contents
 
@@ -27,8 +27,8 @@ This project and everyone participating in it is governed by our [Code of Conduc
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/cl-code-visualizer.git
-   cd cl-code-visualizer
+   git clone https://github.com/YOUR-USERNAME/code-chat-viewer.git
+   cd code-chat-viewer
    ```
 3. **Create a branch** for your changes:
    ```bash
@@ -208,25 +208,33 @@ Fixes #15
 
 Before submitting your PR, please test:
 
-1. **Basic functionality:**
+1. **Single chat conversion (visualizer.py):**
    ```bash
-   python3 scripts/visualizer.py test.json output.html
+   python scripts/visualizer.py test.jsonl output.html
    ```
 
-2. **Different message types:**
+2. **Batch generation (manager.py):**
+   ```bash
+   cp config.example.json config.json
+   # Edit config.json with valid paths
+   python scripts/manager.py
+   ```
+
+3. **Different message types:**
    - User messages
    - Assistant messages
    - Tool uses
    - Tool results
    - Thinking blocks
 
-3. **Edge cases:**
+4. **Edge cases:**
    - Empty JSON files
    - Malformed JSON lines
    - Very long messages
    - Special characters
+   - Missing config.json (should show helpful error)
 
-4. **Browser compatibility:**
+5. **Browser compatibility:**
    - Chrome
    - Firefox
    - Safari
@@ -252,7 +260,7 @@ By contributing, you agree that your contributions will be licensed under the MI
 <a name="español"></a>
 ## 🇪🇸 Español
 
-Antes que nada, ¡gracias por considerar contribuir a Claude Code Visualizer! Son personas como tú las que hacen de esta herramienta algo mejor para todos.
+Antes que nada, ¡gracias por considerar contribuir a Code Chat Viewer! Son personas como tú las que hacen de esta herramienta algo mejor para todos.
 
 ### Tabla de Contenidos
 
@@ -272,8 +280,8 @@ Este proyecto y todos los que participan en él se rigen por nuestro [Código de
 1. **Haz fork del repositorio** en GitHub
 2. **Clona tu fork** localmente:
    ```bash
-   git clone https://github.com/TU-USUARIO/cl-code-visualizer.git
-   cd cl-code-visualizer
+   git clone https://github.com/TU-USUARIO/code-chat-viewer.git
+   cd code-chat-viewer
    ```
 3. **Crea una rama** para tus cambios:
    ```bash
@@ -454,25 +462,33 @@ Fixes #15
 
 Antes de enviar tu PR, por favor prueba:
 
-1. **Funcionalidad básica:**
+1. **Conversión individual (visualizer.py):**
    ```bash
-   python3 scripts/visualizer.py test.json output.html
+   python scripts/visualizer.py test.jsonl output.html
    ```
 
-2. **Diferentes tipos de mensajes:**
+2. **Generación por lotes (manager.py):**
+   ```bash
+   cp config.example.json config.json
+   # Editar config.json con rutas válidas
+   python scripts/manager.py
+   ```
+
+3. **Diferentes tipos de mensajes:**
    - Mensajes de usuario
    - Mensajes del asistente
    - Tool uses
    - Tool results
    - Bloques de pensamiento
 
-3. **Casos extremos:**
+4. **Casos extremos:**
    - Archivos JSON vacíos
    - Líneas JSON malformadas
    - Mensajes muy largos
    - Caracteres especiales
+   - config.json ausente (debe mostrar error descriptivo)
 
-4. **Compatibilidad de navegadores:**
+5. **Compatibilidad de navegadores:**
    - Chrome
    - Firefox
    - Safari
@@ -495,4 +511,4 @@ Al contribuir, aceptas que tus contribuciones serán licenciadas bajo la Licenci
 
 ---
 
-**© 2025 Óscar González Martín. Thank you for contributing!**
+**© 2025-2026 Óscar González Martín. Thank you for contributing!**
