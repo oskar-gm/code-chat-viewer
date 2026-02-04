@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.0)
+[![Version](https://img.shields.io/badge/version-2.1-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.1)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.0:** [Download v2.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.0.zip) - Stable release
+**Version 2.1:** [Download v2.1.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.1.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -103,14 +103,18 @@ Configurable options:
 - Terminal-style aesthetics inspired by VS Code
 - User messages with light blue background
 - Assistant responses with light green background
-- Collapsible tool results (click to expand)
+- Collapsible thinking and tool blocks (collapsed by default, full content on expand)
 - Real-time conversation filter
-- Responsive fullscreen layout
-- User message navigation (prev/next buttons with position counter)
-- Highlight animation when navigating
+- Responsive fullscreen layout with compact spacing
+- Multi-mode message navigation: All, User, or Assistant messages with color-coded highlights
+- Keyboard shortcuts: N (next) / P (previous) for fast navigation
+- Smart scroll: centers short messages, pins long messages to top
+- Dashboard state persistence (sort, filters, search, columns) via localStorage
 - Security-safe HTML rendering (escaped tool parameters)
 - Interactive dashboard with sortable table, search, and category filters
 - Batch generation with incremental updates (only regenerates changed chats)
+- Accurate timestamps and message counts read directly from JSONL files
+- Automatic filtering of snapshot-only entries (Claude Code's undo system)
 - Configurable chat organization (active, shorts, archived)
 - Dashboard link in every chat for easy navigation back
 - Embedded favicon and header icon (self-contained, no external files needed)
@@ -119,6 +123,31 @@ Configurable options:
 - Scan progress indicator with summary
 - Built-in feedback button
 - Windows-friendly: scripts pause on double-click (no instant close)
+
+### What's New in v2.1
+
+**Chat viewer:**
+- Collapsible thinking blocks with first-line preview (collapsed by default)
+- Collapsible tool-use blocks with full content (no more 100-char truncation)
+- Multi-mode message navigation: All (gradient icon), User (blue), Assistant (green)
+- Keyboard shortcuts: N (next) and P (previous) for message navigation
+- Color-coded highlight animation: blue for user, green for assistant messages
+- Smart scroll: centers short messages, pins long messages to top
+- Compact layout: reduced padding, margins, line-height throughout
+- Compact empty lines for denser content display
+- Messages that only contain thinking/tool blocks are skipped during navigation
+
+**Dashboard:**
+- State persistence via localStorage (5h TTL): remembers sort order, filters, search, visible columns
+- Accurate timestamps: always checks JSONL file modification time (sessions-index.json can be stale)
+- Real message counts extracted directly from JSONL files
+- JSONL enrichment for non-indexed chats (project, branch, first prompt, message count)
+- Automatic filtering of file-history-snapshot entries (Claude Code's undo system)
+- Orphan HTML cleanup when snapshot-only chats are detected
+
+**Fixes:**
+- Dashboard filter state now correctly persists (selector bug fixed)
+- Message content vertically centered in containers (removed leading whitespace)
 
 ### What's New in v2.0
 
@@ -332,14 +361,18 @@ Opciones configurables:
 - Estética estilo terminal inspirada en VS Code
 - Mensajes de usuario con fondo azul claro
 - Respuestas del asistente con fondo verde claro
-- Resultados de herramientas colapsables (clic para expandir)
+- Bloques de thinking y tool colapsables (plegados por defecto, contenido completo al expandir)
 - Filtro de conversación en tiempo real
-- Layout fullscreen responsive
-- Navegación por mensajes de usuario (botones prev/next con contador)
-- Animación de resaltado al navegar
+- Layout fullscreen responsive con espaciado compacto
+- Navegación multi-modo: mensajes de Todos, Usuario o Asistente con resaltado por color
+- Atajos de teclado: N (siguiente) / P (anterior) para navegación rápida
+- Scroll inteligente: centra mensajes cortos, fija al inicio los largos
+- Persistencia de estado del dashboard (orden, filtros, búsqueda, columnas) vía localStorage
 - Renderizado HTML seguro (parámetros de herramientas escapados)
 - Panel interactivo con tabla ordenable, búsqueda y filtros por categoría
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
+- Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
+- Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)
 - Organización configurable de chats (activos, cortos, archivados)
 - Enlace al panel en cada chat para volver fácilmente
 - Favicon e icono de cabecera embebidos (autocontenido, sin archivos externos)
@@ -348,6 +381,31 @@ Opciones configurables:
 - Indicador de progreso del escaneo con resumen
 - Botón de feedback integrado
 - Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+
+### Novedades en v2.1
+
+**Visor de chats:**
+- Bloques de thinking colapsables con vista previa de la primera línea (plegados por defecto)
+- Bloques de tool-use colapsables con contenido completo (sin truncar a 100 caracteres)
+- Navegación multi-modo: Todos (icono degradado), Usuario (azul), Asistente (verde)
+- Atajos de teclado: N (siguiente) y P (anterior) para navegar mensajes
+- Animación de resaltado por color: azul para usuario, verde para asistente
+- Scroll inteligente: centra mensajes cortos, fija al inicio los largos
+- Layout compacto: reducidos padding, márgenes y line-height en todo el visor
+- Líneas vacías compactas para una visualización más densa
+- Los mensajes que solo contienen thinking/tools se saltan en la navegación
+
+**Dashboard:**
+- Persistencia de estado vía localStorage (5h TTL): recuerda orden, filtros, búsqueda y columnas visibles
+- Timestamps precisos: siempre verifica el mtime del JSONL (sessions-index.json puede estar obsoleto)
+- Conteos de mensajes reales extraídos directamente de archivos JSONL
+- Enriquecimiento JSONL para chats no indexados (proyecto, rama, primer prompt, conteo de mensajes)
+- Filtrado automático de entradas file-history-snapshot (sistema de undo de Claude Code)
+- Limpieza de HTMLs huérfanos al detectar chats solo de snapshots
+
+**Correcciones:**
+- El estado de los filtros del dashboard ahora se guarda correctamente (bug de selector corregido)
+- Contenido de mensajes centrado verticalmente en contenedores (eliminado espacio blanco inicial)
 
 ### Novedades en v2.0
 

@@ -137,6 +137,8 @@ def escape_html_preserve_structure(text: str) -> str:
 
     text = escape(text)
     text = text.replace('\n', '<br>')
+    # Compact empty lines: replace consecutive <br> with a shorter spacer
+    text = re.sub(r'(<br>){2,}', '<br><div class="blank-line"></div>', text)
     text = re.sub(r'  +', lambda m: '&nbsp;' * len(m.group()), text)
 
     return text
@@ -185,7 +187,9 @@ def format_content_item(item) -> str:
 
     if item_type == 'thinking':
         thinking_text = item.get('thinking', '')
-        return f'<div class="thinking">☉ Thinking...<br><br>{escape_html_preserve_structure(thinking_text)}</div>'
+        first_line = escape(thinking_text.strip().split('\n')[0])
+        preview = f' <span class="thinking-preview">{first_line}...</span>' if first_line else '...'
+        return f'<details class="thinking"><summary>☉ Thinking:{preview}</summary><div class="thinking-content">{escape_html_preserve_structure(thinking_text)}</div></details>'
 
     if item_type == 'tool_use':
         tool_name = item.get('name', 'unknown')
@@ -194,18 +198,15 @@ def format_content_item(item) -> str:
 
         input_lines = []
         for key, value in tool_input.items():
-            if isinstance(value, str) and len(value) > 100:
-                value = value[:100] + '...'
             input_lines.append(f'  {escape(key)}: {escape(str(value))}')
 
         input_str = '<br>'.join(input_lines) if input_lines else '  (no parameters)'
 
-        return f'''<div class="tool-use">
-Tool: {escape(tool_name)}
+        return f'''<details class="tool-use"><summary>Tool: {escape(tool_name)}</summary><div class="tool-use-content">
    ID: {escape(tool_id[:16])}...
    Parameters:
 {input_str}
-</div>'''
+</div></details>'''
 
     if item_type == 'tool_result':
         return ''
@@ -268,9 +269,7 @@ CONVERSATION SUMMARY
 <div class="msg-header">
 <span class="bullet">📤</span> <span class="label">[TOOL RESULT]</span> <span class="metadata">Tool ID: {tool_use_id[-12:]}</span>
 </div>
-<div class="msg-content">
-{result_content}
-</div>
+<div class="msg-content">{result_content}</div>
 <div class="msg-footer">
 <span class="uuid-small">ID: {uuid[-12:] if uuid else 'N/A'}</span>
 </div>
@@ -322,15 +321,28 @@ CONVERSATION SUMMARY
     if not content_html.strip():
         return ''
 
+    # Mark messages that only contain thinking/tool blocks (no real text)
+    has_text = False
+    if isinstance(content, str) and content.strip():
+        has_text = True
+    elif isinstance(content, list):
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                has_text = True
+                break
+            elif isinstance(item, dict) and item.get('type') == 'text' and (item.get('text') or '').strip():
+                has_text = True
+                break
+    if not has_text:
+        msg_class += ' nav-skip'
+
     separator = '─' * 80
 
     message_html = f'''<div class="message {msg_class}">
 <div class="msg-header">
 <span class="bullet">•</span> <span class="label">[{label}]:</span> <span class="metadata">{metadata_str}</span>
 </div>
-<div class="msg-content">
-{content_html}
-</div>
+<div class="msg-content">{content_html}</div>
 <div class="msg-footer">
 <span class="uuid-small">ID: {uuid[-12:] if uuid else 'N/A'}</span>
 {f'<span class="cwd-small">CWD: {cwd}</span>' if cwd else ''}
@@ -478,7 +490,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .terminal-header {{
             background: #2D2D30;
             color: #CCCCCC;
-            padding: 12px 20px;
+            padding: 8px 15px;
             font-size: 13px;
             display: flex;
             justify-content: space-between;
@@ -545,7 +557,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .stats-bar {{
             background: #F3F3F3;
             border-bottom: 1px solid #E0E0E0;
-            padding: 10px 20px;
+            padding: 6px 15px;
             font-size: 12px;
             color: #666;
             display: flex;
@@ -555,7 +567,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .search-bar {{
             background: #FAFAFA;
             border-bottom: 1px solid #E0E0E0;
-            padding: 12px 20px;
+            padding: 8px 15px;
         }}
 
         .search-input {{
@@ -585,22 +597,54 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             flex: 1;
         }}
 
-        .user-nav {{
+        .msg-nav {{
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             background: #FFFFFF;
             border: 1px solid #CCCCCC;
             border-radius: 4px;
-            padding: 4px 10px;
+            padding: 3px 8px;
         }}
 
-        .user-nav-label {{
-            font-size: 14px;
-            user-select: none;
+        .nav-mode-btn {{
+            background: none;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            color: #999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
         }}
 
-        .user-nav-btn {{
+        .nav-mode-btn:hover {{
+            color: #333;
+            background: #F0F0F0;
+        }}
+
+        .nav-mode-btn.active#navUser {{
+            color: #0066CC;
+            border-color: #0066CC;
+            background: #F0F7FF;
+        }}
+        .nav-mode-btn.active#navAssistant {{
+            color: #10893E;
+            border-color: #10893E;
+            background: #F0FFF4;
+        }}
+        .nav-mode-btn.active#navAll {{
+            border-color: #0077AA;
+            background: linear-gradient(135deg, #F0F7FF, #F0FFF4);
+        }}
+        .nav-mode-btn.active#navAll svg path {{
+            fill: url(#navGrad);
+        }}
+
+        .nav-arrow-btn {{
             background: #F0F0F0;
             border: 1px solid #CCCCCC;
             border-radius: 3px;
@@ -615,17 +659,17 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             transition: all 0.15s;
         }}
 
-        .user-nav-btn:hover {{
+        .nav-arrow-btn:hover {{
             background: #0066CC;
             border-color: #0066CC;
             color: white;
         }}
 
-        .user-nav-btn:active {{
+        .nav-arrow-btn:active {{
             transform: scale(0.95);
         }}
 
-        .user-nav-counter {{
+        .nav-counter {{
             font-size: 11px;
             color: #666;
             min-width: 35px;
@@ -633,40 +677,48 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             font-family: 'Consolas', monospace;
         }}
 
-        /* Active user message highlight during navigation */
-        .message.user-msg.user-highlight {{
-            animation: userPulse 1.5s ease-out;
+        /* Message highlight during navigation */
+        .message.user-msg.nav-highlight {{
+            animation: navPulseUser 1.5s ease-out;
+        }}
+        .message.assistant-msg.nav-highlight {{
+            animation: navPulseAssistant 1.5s ease-out;
         }}
 
-        @keyframes userPulse {{
+        @keyframes navPulseUser {{
             0% {{ box-shadow: 0 0 0 0 rgba(0, 102, 204, 0.5); }}
             50% {{ box-shadow: 0 0 0 8px rgba(0, 102, 204, 0.2); }}
             100% {{ box-shadow: 0 0 0 0 rgba(0, 102, 204, 0); }}
         }}
+        @keyframes navPulseAssistant {{
+            0% {{ box-shadow: 0 0 0 0 rgba(16, 137, 62, 0.5); }}
+            50% {{ box-shadow: 0 0 0 8px rgba(16, 137, 62, 0.2); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(16, 137, 62, 0); }}
+        }}
 
         .terminal-content {{
-            padding: 20px;
+            padding: 10px 15px;
             max-height: calc(100vh - 200px);
             overflow-y: auto;
             background: #FFFFFF;
         }}
 
         .message {{
-            margin-bottom: 20px;
+            margin-bottom: 8px;
             font-size: 13px;
-            line-height: 1.8;
+            line-height: 1.5;
         }}
 
         .msg-header {{
             display: flex;
             align-items: baseline;
-            margin-bottom: 10px;
+            margin-bottom: 4px;
             gap: 8px;
         }}
 
         .bullet {{
             font-weight: bold;
-            font-size: 20px;
+            font-size: 16px;
             margin-right: 4px;
         }}
 
@@ -687,7 +739,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         .user-msg .label,
         .assistant-msg .label {{
-            font-size: 17px;
+            font-size: 15px;
             letter-spacing: 0.5px;
         }}
 
@@ -698,10 +750,14 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         .msg-content {{
-            padding-left: 20px;
+            padding-left: 15px;
             color: #1E1E1E;
             white-space: pre-wrap;
             word-wrap: break-word;
+        }}
+
+        .blank-line {{
+            height: 0.4em;
         }}
 
         .tool-result-msg .msg-content {{
@@ -710,34 +766,32 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         /* Higher specificity to prevent CSS cascade conflicts */
         .message.user-msg .msg-content {{
-            padding: 12px 20px;
-            padding-left: 20px;
+            padding: 6px 12px;
             color: #0066CC;
             background: #F8FBFF;
             border-left: 3px solid #0066CC;
             border-radius: 4px;
-            margin-left: 20px;
+            margin-left: 15px;
             font-size: 14px;
-            line-height: 1.7;
+            line-height: 1.5;
         }}
 
         .assistant-msg .msg-content {{
-            padding: 12px 20px;
-            padding-left: 20px;
+            padding: 6px 12px;
             color: #1E1E1E;
             background: #FAFFF8;
             border-left: 3px solid #10893E;
             border-radius: 4px;
-            margin-left: 20px;
+            margin-left: 15px;
             font-size: 14px;
-            line-height: 1.7;
+            line-height: 1.5;
         }}
 
         .tool-result-msg {{
-            margin-bottom: 20px;
+            margin-bottom: 8px;
             background: #F8F8F8;
             border-left: 3px solid #FF6B00;
-            padding: 15px;
+            padding: 8px 10px;
             border-radius: 4px;
         }}
 
@@ -765,7 +819,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         .tool-result-content {{
-            margin-top: 10px;
+            margin-top: 6px;
             display: none;
         }}
 
@@ -782,31 +836,55 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .thinking {{
             background: #FFFFFF;
             border-left: 3px solid #B8C8B8;
-            padding: 12px;
-            margin: 10px 0;
+            margin: 5px 0;
             font-style: italic;
             color: #666;
             border-radius: 4px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
             font-size: 13px;
-            line-height: 1.6;
+            line-height: 1.5;
+        }}
+        .thinking summary {{
+            padding: 6px 10px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .thinking[open] .thinking-preview {{
+            display: none;
+        }}
+        .thinking-content {{
+            padding: 0 10px 8px;
+            border-top: 1px solid #E0E8E0;
         }}
 
         .tool-use {{
             background: #48484A;
             border-left: 3px solid #6A6A6C;
-            padding: 12px;
-            margin: 10px 0;
+            margin: 5px 0;
             color: #E8E8E8;
             border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
             font-size: 13px;
-            line-height: 1.6;
+            line-height: 1.5;
+        }}
+        .tool-use summary {{
+            padding: 6px 10px;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .tool-use-content {{
+            padding: 0 10px 8px;
+            border-top: 1px solid #5A5A5C;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }}
 
         .msg-footer {{
-            padding-left: 20px;
-            margin-top: 8px;
+            padding-left: 15px;
+            margin-top: 3px;
             font-size: 11px;
             color: #999;
             display: flex;
@@ -815,7 +893,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         .separator {{
             color: #E0E0E0;
-            margin-top: 10px;
+            margin-top: 4px;
             font-size: 12px;
             letter-spacing: -1px;
         }}
@@ -823,14 +901,14 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .summary-msg {{
             background: #F8F8F8;
             border: 1px solid #E0E0E0;
-            padding: 15px;
-            margin: 20px 0;
+            padding: 10px;
+            margin: 10px 0;
         }}
 
         .summary-header {{
             color: #666;
             font-size: 12px;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
             letter-spacing: -0.5px;
         }}
 
@@ -856,7 +934,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .footer {{
             background: #F3F3F3;
             border-top: 1px solid #E0E0E0;
-            padding: 15px 20px;
+            padding: 8px 15px;
             text-align: center;
             color: #666;
             font-size: 12px;
@@ -951,11 +1029,19 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         <div class="search-bar">
             <input type="text" class="search-input" id="searchInput" placeholder="Filter conversation...">
-            <div class="user-nav">
-                <span class="user-nav-label">👤</span>
-                <button class="user-nav-btn" id="prevUser" title="Previous user message">▲</button>
-                <button class="user-nav-btn" id="nextUser" title="Next user message">▼</button>
-                <span class="user-nav-counter" id="userCounter">0/0</span>
+            <div class="msg-nav">
+                <button class="nav-mode-btn active" id="navAll" title="All messages">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><defs><linearGradient id="navGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0066CC"/><stop offset="100%" stop-color="#10893E"/></linearGradient></defs><path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/></svg>
+                </button>
+                <button class="nav-mode-btn" id="navUser" title="User messages">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 12c2.7 0 4.8-2.2 4.8-4.8S14.7 2.4 12 2.4 7.2 4.6 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+                </button>
+                <button class="nav-mode-btn" id="navAssistant" title="Assistant messages">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>
+                </button>
+                <button class="nav-arrow-btn" id="prevMsg" title="Previous (P)">&#9650;</button>
+                <button class="nav-arrow-btn" id="nextMsg" title="Next (N)">&#9660;</button>
+                <span class="nav-counter" id="navCounter">0/0</span>
             </div>
         </div>
 
@@ -972,90 +1058,104 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     </div>
 
     <script>
-        // ====== USER MESSAGE NAVIGATION ======
-        let userMessages = [];
-        let currentUserIndex = -1;
+        // ====== MESSAGE NAVIGATION ======
+        let navMessages = [];
+        let currentNavIndex = -1;
+        let navMode = 'all';
         let observerActive = true;
+        let navObserver = null;
 
-        function initUserNavigation() {{
-            // Get all user messages (not tool results)
-            userMessages = Array.from(document.querySelectorAll('.message.user-msg'));
-            updateUserCounter();
+        function getNavSelector() {{
+            if (navMode === 'user') return '.message.user-msg:not(.nav-skip)';
+            if (navMode === 'assistant') return '.message.assistant-msg:not(.nav-skip)';
+            return '.message.user-msg:not(.nav-skip), .message.assistant-msg:not(.nav-skip)';
         }}
 
-        function updateUserCounter() {{
-            const counter = document.getElementById('userCounter');
-            if (userMessages.length === 0) {{
+        function initNavigation() {{
+            navMessages = Array.from(document.querySelectorAll(getNavSelector()));
+            currentNavIndex = -1;
+            updateNavCounter();
+            setupScrollObserver();
+        }}
+
+        function updateNavCounter() {{
+            const counter = document.getElementById('navCounter');
+            if (navMessages.length === 0) {{
                 counter.textContent = '0/0';
             }} else {{
-                counter.textContent = `${{currentUserIndex + 1}}/${{userMessages.length}}`;
+                counter.textContent = `${{currentNavIndex + 1}}/${{navMessages.length}}`;
             }}
         }}
 
-        function scrollToUserMessage(index) {{
-            if (userMessages.length === 0) return;
-
-            // Pause observer during programmatic scroll
+        function scrollToNavMessage(index) {{
+            if (navMessages.length === 0) return;
             observerActive = false;
-
-            // Remove previous highlight
-            userMessages.forEach(msg => msg.classList.remove('user-highlight'));
-
-            // Apply new index
-            currentUserIndex = index;
-
-            // Scroll to message
-            const targetMsg = userMessages[currentUserIndex];
-            targetMsg.scrollIntoView({{ behavior: 'auto', block: 'center' }});
-
-            // Temporary highlight
-            targetMsg.classList.add('user-highlight');
-
-            updateUserCounter();
-
-            // Reactivate observer after scroll
+            navMessages.forEach(msg => msg.classList.remove('nav-highlight'));
+            currentNavIndex = index;
+            const targetMsg = navMessages[currentNavIndex];
+            const container = document.getElementById('terminalContent');
+            const block = targetMsg.offsetHeight >= container.clientHeight ? 'start' : 'center';
+            targetMsg.scrollIntoView({{ behavior: 'auto', block }});
+            targetMsg.classList.add('nav-highlight');
+            updateNavCounter();
             setTimeout(() => {{ observerActive = true; }}, 100);
         }}
 
-        function goToPrevUser() {{
-            if (userMessages.length === 0) return;
-
-            if (currentUserIndex <= 0) {{
-                currentUserIndex = userMessages.length - 1;
+        function goToPrev() {{
+            if (navMessages.length === 0) return;
+            if (currentNavIndex <= 0) {{
+                currentNavIndex = navMessages.length - 1;
             }} else {{
-                currentUserIndex--;
+                currentNavIndex--;
             }}
-            scrollToUserMessage(currentUserIndex);
+            scrollToNavMessage(currentNavIndex);
         }}
 
-        function goToNextUser() {{
-            if (userMessages.length === 0) return;
-
-            if (currentUserIndex >= userMessages.length - 1) {{
-                currentUserIndex = 0;
+        function goToNext() {{
+            if (navMessages.length === 0) return;
+            if (currentNavIndex >= navMessages.length - 1) {{
+                currentNavIndex = 0;
             }} else {{
-                currentUserIndex++;
+                currentNavIndex++;
             }}
-            scrollToUserMessage(currentUserIndex);
+            scrollToNavMessage(currentNavIndex);
         }}
 
-        // Event listeners for navigation buttons
-        document.getElementById('prevUser').addEventListener('click', goToPrevUser);
-        document.getElementById('nextUser').addEventListener('click', goToNextUser);
+        function setNavMode(mode) {{
+            navMode = mode;
+            document.querySelectorAll('.nav-mode-btn').forEach(btn => btn.classList.remove('active'));
+            const id = 'nav' + mode.charAt(0).toUpperCase() + mode.slice(1);
+            document.getElementById(id).classList.add('active');
+            if (navObserver) navObserver.disconnect();
+            initNavigation();
+        }}
 
-        // Intersection Observer to detect manual scrolling
+        // Navigation buttons
+        document.getElementById('prevMsg').addEventListener('click', goToPrev);
+        document.getElementById('nextMsg').addEventListener('click', goToNext);
+        document.getElementById('navAll').addEventListener('click', () => setNavMode('all'));
+        document.getElementById('navUser').addEventListener('click', () => setNavMode('user'));
+        document.getElementById('navAssistant').addEventListener('click', () => setNavMode('assistant'));
+
+        // Keyboard shortcuts (N = next, P = previous)
+        document.addEventListener('keydown', function(e) {{
+            if (e.target.tagName === 'INPUT') return;
+            if (e.key === 'n' || e.key === 'N') goToNext();
+            if (e.key === 'p' || e.key === 'P') goToPrev();
+        }});
+
+        // Intersection Observer for scroll tracking
         function setupScrollObserver() {{
             const container = document.getElementById('terminalContent');
-
-            const observer = new IntersectionObserver((entries) => {{
+            if (navObserver) navObserver.disconnect();
+            navObserver = new IntersectionObserver((entries) => {{
                 if (!observerActive) return;
-
                 entries.forEach(entry => {{
                     if (entry.isIntersecting && entry.intersectionRatio > 0.5) {{
-                        const visibleIndex = userMessages.indexOf(entry.target);
-                        if (visibleIndex !== -1 && visibleIndex !== currentUserIndex) {{
-                            currentUserIndex = visibleIndex;
-                            updateUserCounter();
+                        const visibleIndex = navMessages.indexOf(entry.target);
+                        if (visibleIndex !== -1 && visibleIndex !== currentNavIndex) {{
+                            currentNavIndex = visibleIndex;
+                            updateNavCounter();
                         }}
                     }}
                 }});
@@ -1063,15 +1163,12 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 root: container,
                 threshold: 0.5
             }});
-
-            // Observe all user messages
-            userMessages.forEach(msg => observer.observe(msg));
+            navMessages.forEach(msg => navObserver.observe(msg));
         }}
 
-        // Initialize on page load
+        // Initialize
         document.addEventListener('DOMContentLoaded', function() {{
-            initUserNavigation();
-            setupScrollObserver();
+            initNavigation();
         }});
 
         // ====== SEARCH ======

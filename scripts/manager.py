@@ -532,6 +532,80 @@ def parse_html_filename(filename: str) -> dict:
     return {"date": None, "hash": get_hash_from_filename(filename)}
 
 
+def is_snapshot_only(jsonl_path: Path) -> bool:
+    """Check if a JSONL file contains only file-history-snapshot entries."""
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if obj.get("type") in ("user", "assistant"):
+                    return False
+        return True
+    except OSError:
+        return True
+
+
+def extract_jsonl_metadata(jsonl_path: Path) -> dict:
+    """Extract enrichment metadata directly from a JSONL file.
+
+    Reads the file once, collecting: real user message count,
+    first user prompt text, working directory (cwd), and git branch.
+    """
+    result = {
+        "messages": 0,
+        "first_prompt": "",
+        "cwd": "",
+        "git_branch": "",
+    }
+
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                if obj.get("type") != "user":
+                    continue
+
+                if obj.get("isCompactSummary"):
+                    continue
+
+                msg = obj.get("message", {})
+                content = msg.get("content", "")
+
+                # Skip tool_result messages
+                if isinstance(content, list):
+                    if any(
+                        isinstance(item, dict) and item.get("type") == "tool_result"
+                        for item in content
+                    ):
+                        continue
+
+                result["messages"] += 1
+
+                # Capture metadata from first real user message
+                if result["messages"] == 1:
+                    result["cwd"] = obj.get("cwd", "")
+                    result["git_branch"] = obj.get("gitBranch", "")
+
+                    if isinstance(content, str):
+                        result["first_prompt"] = content[:100]
+                    elif isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                result["first_prompt"] = (item.get("text", "") or "")[:100]
+                                break
+    except OSError:
+        pass
+
+    return result
+
+
 def collect_chats_data(config: dict) -> list[dict]:
     """Collect metadata for all generated HTML chat files."""
     output_path = config["_resolved"]["output_path"]
@@ -568,10 +642,17 @@ def collect_chats_data(config: dict) -> list[dict]:
             name = meta.get("customTitle") or meta.get("summary") or "Untitled"
             project = format_project_name(meta.get("projectPath", ""))
             project_full = meta.get("projectPath", "")
-            messages = meta.get("messageCount", 0)
             branch = meta.get("gitBranch", "")
             first_prompt = (meta.get("firstPrompt", "") or "")[:100]
             summary = meta.get("summary", "")
+
+            # Enrich message count from JSONL (sessions-index may be stale)
+            jsonl_file = find_jsonl_for_html(source_path, html_path.name)
+            if jsonl_file:
+                jsonl_meta = extract_jsonl_metadata(jsonl_file)
+                messages = jsonl_meta["messages"] if jsonl_meta["messages"] > 0 else meta.get("messageCount", 0)
+            else:
+                messages = meta.get("messageCount", 0)
 
             created = meta.get("created", "")
             modified = meta.get("modified", "")
@@ -593,23 +674,44 @@ def collect_chats_data(config: dict) -> list[dict]:
                 modified_str = modified_dt.strftime("%Y-%m-%d %H:%M")
                 modified_sort = modified_dt.timestamp()
             except (ValueError, OSError):
-                jsonl_file = find_jsonl_for_html(source_path, html_path.name)
-                if jsonl_file:
-                    mt = datetime.fromtimestamp(jsonl_file.stat().st_mtime)
+                modified_sort = 0
+
+            # Always check JSONL mtime - sessions-index.json may be stale
+            if jsonl_file:
+                jsonl_mtime = jsonl_file.stat().st_mtime
+                if jsonl_mtime > modified_sort:
+                    mt = datetime.fromtimestamp(jsonl_mtime)
                     modified_str = mt.strftime("%Y-%m-%d %H:%M")
-                    modified_sort = mt.timestamp()
-                else:
-                    modified_str = "N/A"
-                    modified_sort = 0
+                    modified_sort = jsonl_mtime
+            elif modified_sort == 0:
+                modified_str = "N/A"
         else:
             name = html_path.stem
             if "Agent-" in name:
                 name = f"[Agent] {name}"
-            project = find_jsonl_project(source_path, hash_prefix)
-            project_full = project
-            messages = 0
-            branch = ""
-            first_prompt = ""
+
+            # Enrich from JSONL if available
+            jsonl_file = find_jsonl_for_html(source_path, html_path.name)
+
+            if jsonl_file:
+                jsonl_meta = extract_jsonl_metadata(jsonl_file)
+                messages = jsonl_meta["messages"]
+                branch = jsonl_meta["git_branch"]
+                first_prompt = jsonl_meta["first_prompt"]
+
+                if jsonl_meta["cwd"]:
+                    project = format_project_name(jsonl_meta["cwd"])
+                    project_full = jsonl_meta["cwd"]
+                else:
+                    project = find_jsonl_project(source_path, hash_prefix)
+                    project_full = project
+            else:
+                project = find_jsonl_project(source_path, hash_prefix)
+                project_full = project
+                messages = 0
+                branch = ""
+                first_prompt = ""
+
             summary = ""
 
             if parsed["date"]:
@@ -619,7 +721,6 @@ def collect_chats_data(config: dict) -> list[dict]:
                 created_str = "N/A"
                 created_sort = 0
 
-            jsonl_file = find_jsonl_for_html(source_path, html_path.name)
             if jsonl_file:
                 mt = datetime.fromtimestamp(jsonl_file.stat().st_mtime)
                 modified_str = mt.strftime("%Y-%m-%d %H:%M")
@@ -728,17 +829,17 @@ def generate_index(config: dict) -> int:
 
     # Build filter JS
     filter_js_vars = "const showActive = document.getElementById('filterActive').checked;"
-    filter_js_listeners = "document.getElementById('filterActive').addEventListener('change', filterTable);"
+    filter_js_listeners = "document.getElementById('filterActive').addEventListener('change', () => { filterTable(); saveState(); });"
     filter_js_conditions = "(category === 'Active' && showActive)"
 
     if shorts_enabled:
         filter_js_vars += "\n            const showShort = document.getElementById('filterShort').checked;"
-        filter_js_listeners += "\n        document.getElementById('filterShort').addEventListener('change', filterTable);"
+        filter_js_listeners += "\n        document.getElementById('filterShort').addEventListener('change', () => { filterTable(); saveState(); });"
         filter_js_conditions += " ||\n                    (category === 'Short' && showShort)"
 
     if archive_enabled:
         filter_js_vars += "\n            const showArchived = document.getElementById('filterArchived').checked;"
-        filter_js_listeners += "\n        document.getElementById('filterArchived').addEventListener('change', filterTable);"
+        filter_js_listeners += "\n        document.getElementById('filterArchived').addEventListener('change', () => { filterTable(); saveState(); });"
         filter_js_conditions += " ||\n                    (category === 'Archived' && showArchived)"
 
     html_content = f'''<!DOCTYPE html>
@@ -752,12 +853,19 @@ def generate_index(config: dict) -> int:
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
+        html, body {{
+            height: 100%;
+            overflow: hidden;
+        }}
+
         body {{
             font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
             background: #FFFFFF;
             color: #1E1E1E;
             line-height: 1.4;
             font-size: 13px;
+            display: flex;
+            flex-direction: column;
         }}
 
         .header {{
@@ -931,7 +1039,8 @@ def generate_index(config: dict) -> int:
 
         .table-container {{
             padding: 15px 20px;
-            overflow-x: auto;
+            flex: 1;
+            overflow: auto;
         }}
 
         table {{
@@ -1096,6 +1205,42 @@ def generate_index(config: dict) -> int:
     </div>
 
     <script>
+        /* State persistence (localStorage, 5h TTL) */
+        const STATE_KEY = 'ccv-dashboard-state';
+        const STATE_TTL = 5 * 60 * 60 * 1000;
+
+        function saveState() {{
+            const state = {{
+                ts: Date.now(),
+                sort: currentSort,
+                search: document.getElementById('searchInput').value,
+                filters: {{}},
+                columns: {{}}
+            }};
+            document.querySelectorAll('.filter-group input[type="checkbox"]').forEach(cb => {{
+                state.filters[cb.id] = cb.checked;
+            }});
+            document.querySelectorAll('.columns-toggle input[data-col]').forEach(cb => {{
+                state.columns[cb.dataset.col] = cb.checked;
+            }});
+            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        }}
+
+        function loadState() {{
+            try {{
+                const raw = localStorage.getItem(STATE_KEY);
+                if (!raw) return null;
+                const state = JSON.parse(raw);
+                if (Date.now() - state.ts > STATE_TTL) {{
+                    localStorage.removeItem(STATE_KEY);
+                    return null;
+                }}
+                return state;
+            }} catch (e) {{
+                return null;
+            }}
+        }}
+
         /* Table sorting */
         let currentSort = {{ col: 'modified', dir: 'desc' }};
 
@@ -1108,6 +1253,7 @@ def generate_index(config: dict) -> int:
                 th.classList.add(dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
                 currentSort = {{ col, dir }};
                 sortTable(col, dir);
+                saveState();
             }});
         }});
 
@@ -1136,7 +1282,7 @@ def generate_index(config: dict) -> int:
         }}
 
         /* Search and filter */
-        document.getElementById('searchInput').addEventListener('input', filterTable);
+        document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
         {filter_js_listeners}
 
         function filterTable() {{
@@ -1161,8 +1307,35 @@ def generate_index(config: dict) -> int:
                 document.querySelectorAll('.' + colClass).forEach(el => {{
                     el.classList.toggle('hidden-col', !show);
                 }});
+                saveState();
             }});
         }});
+
+        /* Restore state on load */
+        const saved = loadState();
+        if (saved) {{
+            if (saved.search) document.getElementById('searchInput').value = saved.search;
+            Object.entries(saved.filters || {{}}).forEach(([id, checked]) => {{
+                const el = document.getElementById(id);
+                if (el) el.checked = checked;
+            }});
+            Object.entries(saved.columns || {{}}).forEach(([col, checked]) => {{
+                const cb = document.querySelector(`.columns-toggle input[data-col="${{col}}"]`);
+                if (cb) {{
+                    cb.checked = checked;
+                    document.querySelectorAll('.' + col).forEach(el => {{
+                        el.classList.toggle('hidden-col', !checked);
+                    }});
+                }}
+            }});
+            if (saved.sort) {{
+                currentSort = saved.sort;
+                document.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
+                const th = document.querySelector(`th[data-sort="${{saved.sort.col}}"]`);
+                if (th) th.classList.add(saved.sort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                sortTable(saved.sort.col, saved.sort.dir);
+            }}
+        }}
 
         filterTable();
     </script>
@@ -1226,6 +1399,13 @@ def main():
             if is_agent and not include_agents:
                 continue
             if is_agent and file_size < min_agent_size:
+                continue
+            if is_snapshot_only(jsonl_file):
+                # Clean up existing HTML if it was generated before this filter
+                temp_hash = get_hash_from_filename(filename) if not filename.startswith("agent-") else filename.replace("agent-", "").replace(".jsonl", "")[:2]
+                orphan_html = find_existing_html(output_path, temp_hash, filename.startswith("agent-"))
+                if orphan_html:
+                    orphan_html.unlink()
                 continue
 
             agent_suffix = ""
