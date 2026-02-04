@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.0
+  version: 2.1
   keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
@@ -140,7 +140,9 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
 - **Optional columns**: UUID, Branch, Size, First Prompt (toggle with checkboxes)
 - **Direct links**: Icon to open each chat HTML file
-- **Enriched data**: Uses `sessions-index.json` for name, summary, message count, git branch
+- **Enriched data**: Uses `sessions-index.json` and direct JSONL parsing for name, summary, message count, git branch
+- **State persistence**: Remembers sort order, filters, search text, and visible columns via localStorage (5h TTL)
+- **Snapshot filtering**: Automatically excludes file-history-snapshot entries (Claude Code's undo system)
 - **Feedback button**: Highlighted in header, also in footer
 
 ## Chat Page Features
@@ -149,7 +151,11 @@ Each generated chat HTML includes:
 
 - **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
 - **Conversation filter**: Filter messages by text content
-- **User message navigation**: Prev/next buttons with position counter and scroll sync
+- **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, position counter, and keyboard shortcuts (N/P)
+- **Collapsible thinking blocks**: Collapsed by default with first-line preview; expand for full content
+- **Collapsible tool-use blocks**: Collapsed by default; expand for full untruncated content
+- **Color-coded highlights**: Blue for user messages, green for assistant messages
+- **Smart scroll**: Centers short messages; pins long messages to top for readability
 - **Feedback button**: In header (highlighted) and footer
 - **Collapsible tool results**: Click to expand/collapse
 
@@ -186,6 +192,9 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 - The manager imports functions from `visualizer.py` (same directory): `parse_chat_json`, `generate_html`, `get_chat_timestamp`, `generate_output_filename`, `ICON_BASE64`, `ICON_FAVICON_BASE64`
 - HTML generation is deterministic: same JSONL input produces same HTML output
 - The manager only regenerates an HTML if the source JSONL is newer than the existing HTML
+- Timestamps are always verified against JSONL file mtime (sessions-index.json can be stale)
+- Message counts and metadata are extracted directly from JSONL files for accuracy
+- File-history-snapshot entries (Claude Code's undo system) are automatically filtered out
 - Organization (shorts/archive) uses the JSONL modification time as "last used" indicator, not the HTML generation time
 - Dashboard links in chat pages are automatically adjusted for subfolder depth (`../` or `../../`)
 - Favicon uses a dark icon (visible on white browser tabs); header uses a light icon (visible on dark header)
@@ -199,4 +208,4 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 Author: Óscar González Martín
 Repository: https://github.com/oskar-gm/code-chat-viewer
 License: MIT
-Version: 2.0
+Version: 2.1
