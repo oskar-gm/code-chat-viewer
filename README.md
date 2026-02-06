@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.1-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.1)
+[![Version](https://img.shields.io/badge/version-2.1.1-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.1.1)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.1:** [Download v2.1.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.1.zip) - Stable release
+**Version 2.1.1:** [Download v2.1.1.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.1.1.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -148,6 +148,7 @@ Configurable options:
 **Fixes:**
 - Dashboard filter state now correctly persists (selector bug fixed)
 - Message content vertically centered in containers (removed leading whitespace)
+- Dashboard now displays custom titles set via `/rename` for all chats, including those not indexed in sessions-index.json
 
 ### What's New in v2.0
 
@@ -406,6 +407,7 @@ Opciones configurables:
 **Correcciones:**
 - El estado de los filtros del dashboard ahora se guarda correctamente (bug de selector corregido)
 - Contenido de mensajes centrado verticalmente en contenedores (eliminado espacio blanco inicial)
+- El dashboard ahora muestra los títulos personalizados asignados con `/rename` en todos los chats, incluyendo los no indexados en sessions-index.json
 
 ### Novedades en v2.0
 
