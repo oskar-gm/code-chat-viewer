@@ -552,13 +552,15 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
     """Extract enrichment metadata directly from a JSONL file.
 
     Reads the file once, collecting: real user message count,
-    first user prompt text, working directory (cwd), and git branch.
+    first user prompt text, working directory (cwd), git branch,
+    and custom title (from /rename command).
     """
     result = {
         "messages": 0,
         "first_prompt": "",
         "cwd": "",
         "git_branch": "",
+        "custom_title": "",
     }
 
     try:
@@ -567,6 +569,11 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
                 try:
                     obj = json.loads(line.strip())
                 except (json.JSONDecodeError, ValueError):
+                    continue
+
+                # Capture custom title entries (from /rename command)
+                if obj.get("type") == "custom-title":
+                    result["custom_title"] = obj.get("customTitle", "")
                     continue
 
                 if obj.get("type") != "user":
@@ -646,11 +653,15 @@ def collect_chats_data(config: dict) -> list[dict]:
             first_prompt = (meta.get("firstPrompt", "") or "")[:100]
             summary = meta.get("summary", "")
 
-            # Enrich message count from JSONL (sessions-index may be stale)
+            # Enrich from JSONL (sessions-index may be stale)
             jsonl_file = find_jsonl_for_html(source_path, html_path.name)
             if jsonl_file:
                 jsonl_meta = extract_jsonl_metadata(jsonl_file)
                 messages = jsonl_meta["messages"] if jsonl_meta["messages"] > 0 else meta.get("messageCount", 0)
+
+                # If sessions-index.json lacks customTitle, try JSONL
+                if not meta.get("customTitle") and jsonl_meta.get("custom_title"):
+                    name = jsonl_meta["custom_title"]
             else:
                 messages = meta.get("messageCount", 0)
 
@@ -698,6 +709,10 @@ def collect_chats_data(config: dict) -> list[dict]:
                 messages = jsonl_meta["messages"]
                 branch = jsonl_meta["git_branch"]
                 first_prompt = jsonl_meta["first_prompt"]
+
+                # Use custom title from JSONL if available (set by /rename)
+                if jsonl_meta["custom_title"]:
+                    name = jsonl_meta["custom_title"]
 
                 if jsonl_meta["cwd"]:
                     project = format_project_name(jsonl_meta["cwd"])
@@ -847,7 +862,7 @@ def generate_index(config: dict) -> int:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="Code Chat Viewer v2.0">
+    <meta name="generator" content="Code Chat Viewer v2.1.1">
     <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
     <title>Code Chat Viewer - Dashboard</title>
     <style>

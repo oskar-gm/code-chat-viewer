@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Code Chat Viewer v2.0
+Code Chat Viewer v2.1.1
 
 Converts Claude Code chat JSON files (JSONL format) into formatted HTML
 visualizations with terminal-style aesthetics, syntax highlighting, and
@@ -412,7 +412,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     html_template = f'''<!DOCTYPE html>
 <!--
 =============================================================================
-Code Chat Viewer v2.0 - Professional Chat Log HTML Exporter
+Code Chat Viewer v2.1.1 - Professional Chat Log HTML Exporter
 Generated HTML Visualization
 =============================================================================
 
@@ -440,7 +440,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, VS Code, and AI coding assistants.">
     <meta name="keywords" content="Claude Code, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, code assistant history, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard, coding assistant logs">
 
-    <meta name="generator" content="Code Chat Viewer v2.0 - https://github.com/oskar-gm/code-chat-viewer">
+    <meta name="generator" content="Code Chat Viewer v2.1.1 - https://github.com/oskar-gm/code-chat-viewer">
     <meta name="robots" content="index, follow">
     <meta name="language" content="English, Spanish">
 

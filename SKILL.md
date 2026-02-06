@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.1
+  version: 2.1.1
   keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
