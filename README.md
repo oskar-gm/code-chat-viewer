@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.1.1-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.1.1)
+[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.2.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.1.1:** [Download v2.1.1.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.1.1.zip) - Stable release
+**Version 2.2.0:** [Download v2.2.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.2.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -111,7 +111,7 @@ Configurable options:
 - Smart scroll: centers short messages, pins long messages to top
 - Dashboard state persistence (sort, filters, search, columns) via localStorage
 - Security-safe HTML rendering (escaped tool parameters)
-- Interactive dashboard with sortable table, search, and category filters
+- Interactive dashboard with sortable table, search, exclude filter, and category filters
 - Batch generation with incremental updates (only regenerates changed chats)
 - Accurate timestamps and message counts read directly from JSONL files
 - Automatic filtering of snapshot-only entries (Claude Code's undo system)
@@ -119,10 +119,33 @@ Configurable options:
 - Dashboard link in every chat for easy navigation back
 - Embedded favicon and header icon (self-contained, no external files needed)
 - Auto-opens dashboard in browser after generation
+- Smart message rendering: commands, compact blocks, task notifications, user responses with Q&A and markdown previews
+- Color-coded navigation highlights per message type (blue/green/purple/amber)
+- CLI flags: `--name`, `--current`, `--force` for targeted operations
+- Chat title displayed in HTML header (resolved from session metadata)
+- Interactive mode selection (normal/force) for manual execution
 - Full interactive setup with all options configurable
 - Scan progress indicator with summary
 - Built-in feedback button
 - Windows-friendly: scripts pause on double-click (no instant close)
+
+### What's New in v2.2
+
+**Chat viewer:**
+- Smart rendering: commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews)
+- Color-coded navigation highlights per message type: blue (user), green (assistant), purple (compact), amber (user response)
+- Dashboard exclude filter: hide rows by text (complementary to search)
+- CLI flags: `--current` (auto-detect session), `--name` (search by name), `--force` (regenerate all)
+- Chat title displayed in HTML header (resolved from session metadata)
+- Interactive mode selection (normal/force) for manual execution
+
+**Fixes:**
+- Summary counter now correctly detects summaries embedded in user messages
+- Windows `\r\n` line endings no longer cause extra spacing in HTML output
+- All HTML variables properly escaped (XSS hardening)
+- Bare `except` clauses replaced with specific exception types
+- Duplicate CSS rules consolidated
+- Unused imports and dead code removed
 
 ### What's New in v2.1
 
@@ -201,7 +224,16 @@ cp config.example.json config.json
 python scripts/manager.py
 ```
 
-On Windows, you can also **double-click** the `.py` files directly. The console window will stay open until you press Enter.
+**CLI flags:**
+
+```bash
+python scripts/manager.py --name "search terms"  # Open a specific chat by name
+python scripts/manager.py --current               # Open the current session (auto-detect from CWD)
+python scripts/manager.py --force                  # Regenerate ALL chats
+python scripts/manager.py --force --name "my chat" # Combine flags
+```
+
+On Windows, you can also **double-click** the `.py` files directly. The console prompts for mode selection (normal or force) and stays open until you press Enter.
 
 ### File Structure
 
@@ -244,6 +276,10 @@ Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678
 
 - **User messages**: Blue (`#0066CC`) with light blue background (`#F8FBFF`)
 - **Assistant messages**: Green (`#10893E`) with light green background (`#FAFFF8`)
+- **Commands**: Blue (`#0066CC`) with `[COMMAND]` label and deeper blue background (`#EBF2FF`)
+- **User responses**: Amber (`#D97706`) with Q&A layout, markdown previews, and `[USER RESPONSE]` label
+- **Compact blocks**: Purple (`#8B5CF6`) collapsible blocks grouping summary + pre-compact output
+- **Task notifications**: Color-coded by status — green (completed), blue (in progress), gray (other)
 - **Tool results**: Orange (`#FF6B00`) with gray background (`#F8F8F8`)
 - **Thinking blocks**: White background with subtle gray border and shadow
 - **Tool use blocks**: Dark gray (`#48484A`) with light text (`#E8E8E8`)
@@ -370,7 +406,7 @@ Opciones configurables:
 - Scroll inteligente: centra mensajes cortos, fija al inicio los largos
 - Persistencia de estado del dashboard (orden, filtros, búsqueda, columnas) vía localStorage
 - Renderizado HTML seguro (parámetros de herramientas escapados)
-- Panel interactivo con tabla ordenable, búsqueda y filtros por categoría
+- Panel interactivo con tabla ordenable, búsqueda, filtro de exclusión y filtros por categoría
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
 - Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
 - Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)
@@ -378,10 +414,33 @@ Opciones configurables:
 - Enlace al panel en cada chat para volver fácilmente
 - Favicon e icono de cabecera embebidos (autocontenido, sin archivos externos)
 - Apertura automática del panel en el navegador tras la generación
+- Renderizado inteligente de mensajes: comandos, bloques compact, notificaciones de tareas, respuestas de usuario con Q&A y previews de markdown
+- Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar)
+- Flags CLI: `--name`, `--current`, `--force` para operaciones dirigidas
+- Título del chat en el header del HTML (resuelto desde metadatos de sesión)
+- Selección de modo interactiva (normal/force) en ejecución manual
 - Setup interactivo completo con todas las opciones configurables
 - Indicador de progreso del escaneo con resumen
 - Botón de feedback integrado
 - Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+
+### Novedades en v2.2
+
+**Visor de chats:**
+- Renderizado inteligente: comandos (`[COMMAND]`), bloques compact (colapsables, morado), notificaciones de tareas (color por estado), respuestas de usuario (ámbar con Q&A y previews de markdown)
+- Resaltado de navegación por color según tipo: azul (usuario), verde (asistente), morado (compact), ámbar (respuesta)
+- Filtro de exclusión en dashboard: ocultar filas por texto (complementario a la búsqueda)
+- Flags CLI: `--current` (auto-detectar sesión), `--name` (buscar por nombre), `--force` (regenerar todo)
+- Título del chat en el header del HTML (resuelto desde metadatos de sesión)
+- Selección de modo interactiva (normal/force) en ejecución manual
+
+**Correcciones:**
+- Contador de summaries ahora detecta correctamente los summaries embebidos en mensajes de usuario
+- Los saltos de línea `\r\n` de Windows ya no causan espaciado extra en el HTML
+- Todas las variables HTML correctamente escapadas (protección XSS)
+- Cláusulas `except` genéricas reemplazadas por excepciones específicas
+- Reglas CSS duplicadas consolidadas
+- Imports no usados y código muerto eliminados
 
 ### Novedades en v2.1
 
@@ -460,7 +519,16 @@ cp config.example.json config.json
 python scripts/manager.py
 ```
 
-En Windows, también puedes hacer **doble clic** en los archivos `.py` directamente. La ventana de consola permanecerá abierta hasta que pulses Enter.
+**Flags CLI:**
+
+```bash
+python scripts/manager.py --name "términos"        # Abrir un chat específico por nombre
+python scripts/manager.py --current                 # Abrir la sesión actual (auto-detecta desde CWD)
+python scripts/manager.py --force                   # Regenerar TODOS los chats
+python scripts/manager.py --force --name "mi chat"  # Combinar flags
+```
+
+En Windows, también puedes hacer **doble clic** en los archivos `.py` directamente. La consola permite elegir modo (normal o force) y permanece abierta hasta que pulses Enter.
 
 ### Estructura de archivos
 
@@ -503,6 +571,10 @@ Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def01234
 
 - **Mensajes de usuario**: Azul (`#0066CC`) con fondo azul claro (`#F8FBFF`)
 - **Mensajes del asistente**: Verde (`#10893E`) con fondo verde claro (`#FAFFF8`)
+- **Comandos**: Azul (`#0066CC`) con etiqueta `[COMMAND]` y fondo azul más marcado (`#EBF2FF`)
+- **Respuestas del usuario**: Ámbar (`#D97706`) con layout Q&A, previews de markdown y etiqueta `[USER RESPONSE]`
+- **Bloques compact**: Morado (`#8B5CF6`) colapsables agrupando summary + salida pre-compact
+- **Notificaciones de tareas**: Color por estado — verde (completada), azul (en progreso), gris (otro)
 - **Resultados de herramientas**: Naranja (`#FF6B00`) con fondo gris (`#F8F8F8`)
 - **Bloques de pensamiento**: Fondo blanco con borde gris sutil y sombra
 - **Bloques tool use**: Gris oscuro (`#48484A`) con texto claro (`#E8E8E8`)
