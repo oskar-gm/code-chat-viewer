@@ -1,55 +1,34 @@
 #!/usr/bin/env python3
 """
-Code Chat Viewer v2.1.1
+Code Chat Viewer v2.2.0
 
 Converts Claude Code chat JSON files (JSONL format) into formatted HTML
 visualizations with terminal-style aesthetics, syntax highlighting, and
 interactive features.
 
-Copyright (c) 2025 Óscar González Martín
+Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
 
 Author: Óscar González Martín
-Version: 2.0
+Version: 2.2.0
 Contact: oscar@nucleoia.es
 Website: https://nucleoia.es
 Repository: https://github.com/oskar-gm/code-chat-viewer
 LinkedIn: https://linkedin.com/in/oscar-gonz
 
-This script transforms raw Claude Code conversation logs (JSONL format) into
-readable, styled HTML documents with:
-- Terminal aesthetics with VS Code-inspired colors
-- Collapsible tool results with interactive toggles
-- Real-time search functionality
-- Syntax highlighting for code blocks
-- Responsive fullscreen layout
-- User message navigation with position counter
-- Security-safe HTML rendering
-- Proper attribution in HTML output
-
 For usage instructions, see README.md or visit the repository.
-
-Changes from v1.0:
-- Fullscreen layout: edge-to-edge rendering without borders or shadows
-- User message navigation: prev/next buttons to jump between user messages
-- Position counter with automatic scroll synchronization
-- Highlight animation when navigating to a user message
-- CSS specificity fix: user messages correctly display blue styling
-- Blue-themed styling for unknown content types inside user messages
-- Instant scroll navigation for responsiveness
-- Fast IntersectionObserver reactivation (100ms)
-- Timestamps converted to local timezone
-- Stats bar displays chat date/time instead of generation time
-- Smart output filename generation (Chat YYYY-MM-DD HH-MM hash.html)
-- Security fix: HTML-escaped tool_use parameters to prevent DOM injection
 """
 
 import json
+import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List
 from html import escape
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 # Icon embedded as base64 for favicon and header (self-contained, no external files)
 # 32x32 PNG resized from original icon.png
@@ -121,25 +100,24 @@ def format_timestamp(timestamp_str: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).astimezone()
         return dt.strftime('%I:%M %p').lstrip('0')
-    except:
+    except (ValueError, TypeError):
         return ""
 
-def format_model_name(model: str) -> str:
-    """Format model name to short display form."""
-    if not model:
-        return ""
-    return model
 
 def escape_html_preserve_structure(text: str) -> str:
     """Escape HTML while preserving text structure (newlines, spaces)."""
     if not text:
         return ""
 
+    text = text.replace('\r', '')  # Normalize Windows line endings
     text = escape(text)
     text = text.replace('\n', '<br>')
-    # Compact empty lines: replace consecutive <br> with a shorter spacer
-    text = re.sub(r'(<br>){2,}', '<br><div class="blank-line"></div>', text)
+    # Compact excessive empty lines: 3+ breaks → 2 (preserve paragraph breaks)
+    text = re.sub(r'(<br>){3,}', '<br><br>', text)
     text = re.sub(r'  +', lambda m: '&nbsp;' * len(m.group()), text)
+    # Strip leading/trailing breaks to avoid blank space at top/bottom
+    text = re.sub(r'^(<br>)+', '', text)
+    text = re.sub(r'(<br>)+$', '', text)
 
     return text
 
@@ -148,6 +126,378 @@ def is_tool_result_message(content) -> bool:
     if isinstance(content, list):
         return any(isinstance(item, dict) and item.get('type') == 'tool_result' for item in content)
     return False
+
+# ====== HELPER FUNCTIONS FOR SPECIAL MESSAGE TYPES ======
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes (full and bare) from text."""
+    text = text.replace('\r', '')  # Normalize Windows line endings
+    text = re.sub(r'\x1b\[[0-9;]*m', '', text)  # Full ANSI with ESC prefix
+    text = re.sub(r'\[\d+m', '', text)  # Bare ANSI codes (without ESC prefix)
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Collapse excessive newlines
+    return text.strip()
+
+def _get_text_from_content(content) -> str:
+    """Extract first text value from a content list or string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get('type') == 'text':
+                return item.get('text', '')
+            elif isinstance(item, str):
+                return item
+    return ''
+
+def _get_message_text(msg: Dict) -> str:
+    """Extract text from a full message dict (top-level JSONL entry)."""
+    message_data = msg.get('message', {})
+    if not message_data:
+        return ''
+    return _get_text_from_content(message_data.get('content', []))
+
+def extract_tag_content(text: str, tag_name: str) -> str:
+    """Extract content from an XML-like tag. Returns content or empty string."""
+    match = re.search(rf'<{re.escape(tag_name)}>(.*?)</{re.escape(tag_name)}>', text, re.DOTALL)
+    return match.group(1) if match else ''
+
+def has_tag(text: str, tag_name: str) -> bool:
+    """Check if text contains a specific XML-like tag."""
+    return f'<{tag_name}>' in text
+
+def parse_command_tags(text: str) -> dict:
+    """Parse command-name, command-message and command-args tags from text.
+    Returns dict with name, message, args, display or None if not a command."""
+    if '<command-name>' not in text:
+        return None
+    cmd_name = extract_tag_content(text, 'command-name')
+    cmd_message = extract_tag_content(text, 'command-message')
+    cmd_args = extract_tag_content(text, 'command-args')
+    if not cmd_name:
+        return None
+    # Build display: /command args
+    display = cmd_name if cmd_name.startswith('/') else f'/{cmd_name}'
+    if cmd_args:
+        display = f'{display} {cmd_args}'
+    return {'name': cmd_name, 'message': cmd_message, 'args': cmd_args, 'display': display}
+
+def is_compact_summary(text: str) -> bool:
+    """Check if text is a compact summary (continuation marker)."""
+    return text.strip().startswith('This session is being continued from a previous conversation')
+
+def is_caveat_message(text: str) -> bool:
+    """Check if text contains local-command-caveat (internal system text)."""
+    return '<local-command-caveat>' in text
+
+def is_stdout_message(text: str) -> bool:
+    """Check if text contains local-command-stdout."""
+    return '<local-command-stdout>' in text
+
+def is_task_notification(text: str) -> bool:
+    """Check if text contains task-notification tags."""
+    return '<task-notification>' in text
+
+def parse_ask_result(text: str) -> list:
+    """Parse AskUserQuestion tool result text into Q&A pairs.
+    Returns list of dicts [{question, answer, notes, markdown}].
+    Handles markdown with and without backtick wrappers."""
+    if not text.startswith('User has answered your questions:'):
+        return []
+
+    # Remove prefix and suffix
+    body = text.replace('User has answered your questions:', '').strip()
+    suffix_match = re.search(r'\.\s*You can now continue', body)
+    if suffix_match:
+        body = body[:suffix_match.start()]
+
+    # Split by ", followed by " (separator between Q&A pairs)
+    pairs = re.split(r',\s*(?=")', body.strip())
+
+    results = []
+    for pair in pairs:
+        pair = pair.strip()
+        if not pair:
+            continue
+
+        notes = ''
+        markdown = ''
+
+        # 1. Extract user notes (remove from pair first)
+        notes_match = re.search(r'\s*user notes:\s*(.+?)(?:,\s*"|\s*$)', pair, re.DOTALL)
+        if notes_match:
+            notes = notes_match.group(1).strip().rstrip(',').strip()
+            pair = pair[:notes_match.start()] + pair[notes_match.end():]
+            pair = pair.strip().rstrip(',').strip()
+
+        # 2. Extract selected markdown — try with backticks first
+        md_match = re.search(r'selected markdown:\s*```(.*?)```', pair, re.DOTALL)
+        if md_match:
+            raw_md = md_match.group(1).strip()
+            # Strip language identifier from first line (e.g., 'python', 'js')
+            lines = raw_md.split('\n')
+            if lines and re.match(r'^[a-zA-Z]+$', lines[0].strip()):
+                raw_md = '\n'.join(lines[1:])
+            markdown = raw_md
+            # Remove markdown from pair (discard trailing text after closing ```)
+            pair = pair[:md_match.start()]
+            pair = pair.strip().rstrip(',').strip()
+        else:
+            # Try without backticks — raw content after "selected markdown:"
+            md_match = re.search(r'selected markdown:\s*(.+)', pair, re.DOTALL)
+            if md_match:
+                markdown = md_match.group(1).strip().rstrip(',').strip()
+                pair = pair[:md_match.start()]
+                pair = pair.strip().rstrip(',').strip()
+
+        # 3. Extract Q="A" pattern
+        qa_match = re.match(r'"([^"]*?)"\s*=\s*"([^"]*?)"', pair)
+        if qa_match:
+            results.append({
+                'question': qa_match.group(1),
+                'answer': qa_match.group(2),
+                'notes': notes,
+                'markdown': markdown
+            })
+        elif pair.strip():
+            clean = pair.strip().strip('"')
+            if clean:
+                results.append({
+                    'question': '',
+                    'answer': clean,
+                    'notes': notes,
+                    'markdown': markdown
+                })
+
+    return results
+
+def _get_tool_result_text(item: dict) -> str:
+    """Extract text from a tool_result item."""
+    content = item.get('content', '')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for sub in content:
+            if isinstance(sub, dict) and sub.get('type') == 'text':
+                return sub.get('text', '')
+    return ''
+
+
+# ====== SPECIAL MESSAGE RENDERING FUNCTIONS ======
+
+def render_command_message(cmd_display: str, time_str: str, metadata_str: str, uuid: str, cwd: str) -> str:
+    """Render a /command message with darker user-blue styling."""
+    separator = '─' * 80
+    return f'''<div class="message user-msg command-msg">
+<div class="msg-header">
+<span class="bullet" style="color:#0066CC; font-size:12px;">&#9656;</span> <span class="label" style="color:#1E1E1E;">[COMMAND]</span> <span class="metadata">{escape(metadata_str)}</span>
+</div>
+<div class="msg-content" style="color:#0066CC; background:#EBF2FF; border-left:3px solid #0066CC;">{escape(cmd_display)}</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+{f'<span class="cwd-small">CWD: {escape(cwd)}</span>' if cwd else ''}
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+
+def render_stdout_message(clean_text: str, time_str: str, metadata_str: str, uuid: str, cwd: str) -> str:
+    """Render a local-command-stdout message (non-compact) with grey styling."""
+    separator = '─' * 80
+    return f'''<div class="message user-msg stdout-msg nav-skip">
+<div class="msg-header">
+<span class="bullet" style="color:#6B7280;">&#9654;</span> <span class="label" style="color:#6B7280;">[OUTPUT]</span> <span class="metadata">{escape(metadata_str)}</span>
+</div>
+<div class="msg-content" style="color:#374151; background:#F9FAFB; border-left:3px solid #9CA3AF;">{escape_html_preserve_structure(clean_text)}</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+{f'<span class="cwd-small">CWD: {escape(cwd)}</span>' if cwd else ''}
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+
+def render_task_notification(text: str, uuid: str) -> str:
+    """Render a task-notification as a styled system message."""
+    summary = extract_tag_content(text, 'summary')
+    status = extract_tag_content(text, 'status')
+    clean = re.sub(r'<[^>]+>', '', text).strip()
+    status_upper = status.upper() if status else ''
+    display_text = summary or clean or 'Task notification'
+
+    # Style based on status
+    if status_upper == 'COMPLETED':
+        icon = '&#10003;'
+        accent = '#10893E'
+        bg = '#F0FFF4'
+        border_color = '#10893E'
+    elif status_upper == 'IN_PROGRESS':
+        icon = '&#9656;'
+        accent = '#0066CC'
+        bg = '#F0F7FF'
+        border_color = '#0066CC'
+    else:
+        icon = '&#8226;'
+        accent = '#6B7280'
+        bg = '#F9FAFB'
+        border_color = '#D1D5DB'
+
+    separator = '─' * 80
+    return f'''<div class="message user-msg nav-skip"><div class="msg-content" style="color:{accent}; background:{bg}; border-left:3px solid {border_color}; padding:6px 12px; margin-left:15px; font-size:12px; border-radius:4px;"><span style="font-weight:700;">{icon}</span> <span style="font-weight:600;">[{escape(status_upper) if status_upper else 'TASK'}]</span> {escape(display_text)}</div><div class="separator">{separator}</div></div>
+'''
+
+def render_ask_result_block(qa_pairs: list, tool_use_id: str, uuid: str) -> str:
+    """Render AskUserQuestion result as a visual amber block (open, not collapsible)."""
+    items_html = []
+    for i, qa in enumerate(qa_pairs):
+        q_html = f'<div style="font-weight:700; color:#92400E; margin-bottom:2px;">Q: {escape(qa["question"])}</div>' if qa['question'] else ''
+        a_html = f'<div style="padding-left:16px; color:#B45309;">A: {escape(qa["answer"])}</div>'
+        notes_html = f'<div style="padding-left:16px; color:#9CA3AF; font-style:italic; margin-top:2px;">Note: {escape(qa["notes"])}</div>' if qa.get('notes') else ''
+        md_html = ''
+        if qa.get('markdown'):
+            md_html = f'<pre style="background:#FFF7ED; color:#78350F; padding:8px; margin:4px 0 0 16px; border-radius:4px; font-size:11px; line-height:1.3; overflow-x:auto; white-space:pre; border:1px solid #FDE68A;">{escape(qa["markdown"])}</pre>'
+        sep_html = '<hr style="border:none; border-top:1px solid #FDE68A; margin:6px 0;">' if i < len(qa_pairs) - 1 else ''
+        items_html.append(f'{q_html}{a_html}{notes_html}{md_html}{sep_html}')
+
+    content = ''.join(items_html)
+    separator = '─' * 80
+
+    return f'''<div class="message ask-result-msg nav-always">
+<div class="ask-inner">
+<div class="msg-header">
+<span class="bullet" style="color:#D97706; font-size:14px;">&#10067;</span> <span class="label" style="color:#D97706;">[USER RESPONSE]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:]) if tool_use_id else 'N/A'}</span>
+</div>
+<div style="padding:4px 12px; color:#1E1E1E; white-space:normal; margin-left:15px;">{content}</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+
+def render_compact_block(compact_data: dict) -> str:
+    """Render a grouped compact block (collapsible, purple styling).
+    compact_data: {summary_text, command_display, pre_compact, timestamp, uuid, cwd}"""
+    summary_text = compact_data.get('summary_text', '')
+    command_display = compact_data.get('command_display', '/compact')
+    pre_compact = compact_data.get('pre_compact', '')
+    time_str = compact_data.get('time_str', '')
+    uuid = compact_data.get('uuid', '')
+
+    # Collapse excessive newlines in pre-compact text
+    if pre_compact:
+        pre_compact = re.sub(r'\n{2,}', '\n', pre_compact)
+
+    # Build collapsible content
+    content_parts = []
+    if pre_compact:
+        content_parts.append(f'<div style="margin-bottom:10px;"><strong style="color:#7C3AED; display:block; margin-bottom:4px;">Pre-compact:</strong><pre style="background:#EDE9FE; padding:8px; border-radius:4px; font-size:12px; white-space:pre-wrap; max-height:300px; overflow-y:auto; margin:0;">{escape(pre_compact)}</pre></div>')
+    if summary_text:
+        content_parts.append(f'<div><strong style="color:#7C3AED; display:block; margin-bottom:4px;">Summary:</strong><pre style="background:#EDE9FE; padding:8px; border-radius:4px; font-size:12px; white-space:pre-wrap; max-height:300px; overflow-y:auto; margin:0;">{escape(summary_text)}</pre></div>')
+
+    inner_content = '\n'.join(content_parts)
+    separator = '─' * 80
+
+    # Unique ID for toggle
+    block_id = f'compact-{uuid[-8:]}' if uuid else f'compact-{id(compact_data)}'
+
+    return f'''<div class="message compact-msg nav-always">
+<div class="compact-inner">
+<div class="msg-header compact-header" onclick="(function(){{ var c=document.getElementById('{block_id}'); c.style.display = c.style.display==='none'?'block':'none'; var t=document.getElementById('{block_id}-toggle'); t.textContent = c.style.display==='none'? '\\u25B6':'\\u25BC'; }})()" style="cursor:pointer;">
+<span id="{block_id}-toggle" style="font-size:12px; color:#8B5CF6;">&#9654;</span>
+<span class="bullet" style="color:#8B5CF6;">&#128230;</span> <span class="label" style="color:#7C3AED;">[COMPACT]</span> <span style="color:#6D28D9; font-size:13px; margin-left:8px;">{escape(command_display)}</span> <span class="metadata">{time_str}</span>
+</div>
+<div id="{block_id}" class="compact-content" style="display:none; max-height:600px; overflow-y:auto; padding:8px 12px; margin-left:15px;">
+{inner_content}
+</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+
+
+# ====== COMPACT MESSAGE GROUPING ======
+
+def group_compact_messages(messages: list) -> list:
+    """Pre-process messages to group compact-related messages into single blocks.
+    Returns a new list where compact groups are replaced by a single dict with _compact_group=True."""
+    result = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        text = _get_message_text(msg)
+
+        # Check if this is a compact summary message
+        if (msg.get('message', {}).get('role') == 'user'
+                and not is_tool_result_message(msg.get('message', {}).get('content', []))
+                and is_compact_summary(text)):
+
+            # Start collecting compact-related messages
+            compact_data = {
+                '_compact_group': True,
+                'summary_text': text,
+                'command_display': '/compact',
+                'pre_compact': '',
+                'time_str': format_timestamp(msg.get('timestamp', '')),
+                'uuid': msg.get('uuid', ''),
+                'cwd': msg.get('cwd', ''),
+            }
+
+            # Look ahead for related messages (up to 5)
+            j = i + 1
+            lookahead = 0
+            while j < len(messages) and lookahead < 5:
+                next_msg = messages[j]
+                next_text = _get_message_text(next_msg)
+                next_type = next_msg.get('type', '')
+                next_role = next_msg.get('message', {}).get('role', '')
+
+                # Snapshots pass through (not consumed by compact)
+                if next_type == 'file-history-snapshot':
+                    result.append(next_msg)
+                    j += 1
+                    lookahead += 1
+                    continue
+
+                # Caveat: consume and discard
+                if next_role == 'user' and is_caveat_message(next_text):
+                    j += 1
+                    lookahead += 1
+                    continue
+
+                # Command with /compact: consume and record
+                if next_role == 'user' and not is_tool_result_message(next_msg.get('message', {}).get('content', [])):
+                    cmd = parse_command_tags(next_text)
+                    if cmd and 'compact' in cmd.get('name', '').lower():
+                        compact_data['command_display'] = cmd['display']
+                        if next_msg.get('timestamp'):
+                            compact_data['time_str'] = format_timestamp(next_msg['timestamp'])
+                        j += 1
+                        lookahead += 1
+                        continue
+
+                # Stdout: consume and clean ANSI
+                if next_role == 'user' and is_stdout_message(next_text):
+                    stdout_content = extract_tag_content(next_text, 'local-command-stdout')
+                    compact_data['pre_compact'] = strip_ansi_codes(stdout_content)
+                    j += 1
+                    lookahead += 1
+                    continue
+
+                # Any other message type: stop looking
+                break
+
+            result.append(compact_data)
+            i = j
+        else:
+            result.append(msg)
+            i += 1
+
+    return result
+
 
 def format_tool_result_content(tool_result_data: Dict) -> str:
     """Format tool_result content - displays full content without truncation."""
@@ -168,6 +518,46 @@ def format_tool_result_content(tool_result_data: Dict) -> str:
         return '<br>'.join(parts)
     else:
         return escape(str(content))
+
+def render_ask_tool_use(tool_id: str, tool_input: dict) -> str:
+    """Render AskUserQuestion tool_use with structured questions and markdown previews."""
+    questions = tool_input.get('questions', [])
+    if not questions:
+        return None
+
+    parts = []
+    for q in questions:
+        question_text = q.get('question', '')
+        header_text = q.get('header', '')
+        multi = q.get('multiSelect', False)
+        options = q.get('options', [])
+
+        q_html = f'<div style="font-weight:700; color:#E8E8E8; margin-bottom:4px;">{escape(question_text)}</div>'
+        if header_text:
+            q_html += f'<div style="color:#999; font-size:11px; margin-bottom:4px;">[{escape(header_text)}] {"Multi-select" if multi else "Single-select"}</div>'
+
+        opts_html = []
+        for opt in options:
+            label = opt.get('label', '')
+            desc = opt.get('description', '')
+            md = opt.get('markdown', '')
+            opt_line = f'<div style="padding:2px 0 2px 12px; color:#E8E8E8;">&#8226; <strong>{escape(label)}</strong>'
+            if desc:
+                opt_line += f' &mdash; <span style="color:#999;">{escape(desc)}</span>'
+            opt_line += '</div>'
+            if md:
+                opt_line += f'<pre style="background:#3C3C3E; color:#D4D4D4; padding:8px; margin:2px 0 4px 24px; border-radius:4px; font-size:11px; line-height:1.3; overflow-x:auto; white-space:pre;">{escape(md)}</pre>'
+            opts_html.append(opt_line)
+
+        parts.append(q_html + ''.join(opts_html))
+
+    content = '<hr style="border:none; border-top:1px solid #5A5A5C; margin:6px 0;">'.join(parts)
+
+    return f'''<details class="tool-use"><summary>Tool: AskUserQuestion</summary><div class="tool-use-content" style="white-space:normal;">
+   ID: {escape(tool_id[:16])}...
+<div style="margin-top:6px;">{content}</div>
+</div></details>'''
+
 
 def format_content_item(item) -> str:
     """Format an individual content item."""
@@ -195,6 +585,12 @@ def format_content_item(item) -> str:
         tool_name = item.get('name', 'unknown')
         tool_id = item.get('id', '')
         tool_input = item.get('input', {})
+
+        # Special rendering for AskUserQuestion with structured Q&A
+        if tool_name == 'AskUserQuestion' and 'questions' in tool_input:
+            ask_html = render_ask_tool_use(tool_id, tool_input)
+            if ask_html:
+                return ask_html
 
         input_lines = []
         for key, value in tool_input.items():
@@ -257,21 +653,67 @@ CONVERSATION SUMMARY
     if not content:
         return ''
 
+    # ====== DETECT SPECIAL USER MESSAGE TYPES ======
+    if role == 'user' and not is_tool_result_message(content):
+        text = _get_text_from_content(content)
+
+        # Caveat messages: always hide
+        if is_caveat_message(text):
+            return ''
+
+        # Task notifications: render as system message
+        if is_task_notification(text):
+            return render_task_notification(text, uuid)
+
+        # Command messages: render with blue styling
+        cmd = parse_command_tags(text)
+        if cmd:
+            time_str = format_timestamp(timestamp)
+            metadata_parts = []
+            if time_str:
+                metadata_parts.append(time_str)
+            if git_branch:
+                metadata_parts.append(f'[{git_branch}]')
+            metadata_str = '  '.join(metadata_parts) if metadata_parts else ''
+            return render_command_message(cmd['display'], time_str, metadata_str, uuid, cwd)
+
+        # Stdout messages (non-compact): render with grey styling
+        if is_stdout_message(text):
+            stdout_content = extract_tag_content(text, 'local-command-stdout')
+            clean_text = strip_ansi_codes(stdout_content)
+            time_str = format_timestamp(timestamp)
+            metadata_parts = []
+            if time_str:
+                metadata_parts.append(time_str)
+            if git_branch:
+                metadata_parts.append(f'[{git_branch}]')
+            metadata_str = '  '.join(metadata_parts) if metadata_parts else ''
+            return render_stdout_message(clean_text, time_str, metadata_str, uuid, cwd)
+
     # ====== DETECT TOOL_RESULT (NOT A REAL USER MESSAGE) ======
     if role == 'user' and is_tool_result_message(content):
         tool_results_html = []
         for item in content:
             if isinstance(item, dict) and item.get('type') == 'tool_result':
+                # Check if this is an AskUserQuestion result
+                result_text = _get_tool_result_text(item)
+                if result_text.startswith('User has answered your questions:'):
+                    qa_pairs = parse_ask_result(result_text)
+                    if qa_pairs:
+                        tool_results_html.append(render_ask_result_block(
+                            qa_pairs, item.get('tool_use_id', ''), uuid))
+                        continue
+
                 result_content = format_tool_result_content(item)
                 tool_use_id = item.get('tool_use_id', 'N/A')
 
                 tool_results_html.append(f'''<div class="tool-result-msg">
 <div class="msg-header">
-<span class="bullet">📤</span> <span class="label">[TOOL RESULT]</span> <span class="metadata">Tool ID: {tool_use_id[-12:]}</span>
+<span class="bullet">&#128228;</span> <span class="label">[TOOL RESULT]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:])}</span>
 </div>
 <div class="msg-content">{result_content}</div>
 <div class="msg-footer">
-<span class="uuid-small">ID: {uuid[-12:] if uuid else 'N/A'}</span>
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
 </div>
 <div class="separator">{'─' * 80}</div>
 </div>''')
@@ -293,15 +735,13 @@ CONVERSATION SUMMARY
         msg_class = 'other-msg'
 
     time_str = format_timestamp(timestamp)
-    model_str = format_model_name(model)
-
     metadata_parts = []
     if time_str:
         metadata_parts.append(time_str)
-    if model_str:
-        metadata_parts.append(model_str)
+    if model:
+        metadata_parts.append(model)
     if git_branch:
-        metadata_parts.append(f'[{git_branch}]')
+        metadata_parts.append(f'[{escape(git_branch)}]')
 
     metadata_str = '  '.join(metadata_parts) if metadata_parts else ''
 
@@ -316,7 +756,7 @@ CONVERSATION SUMMARY
             if formatted:
                 content_parts.append(formatted)
 
-    content_html = '<br><br>'.join(content_parts)
+    content_html = '<br>'.join(content_parts)
 
     if not content_html.strip():
         return ''
@@ -340,12 +780,12 @@ CONVERSATION SUMMARY
 
     message_html = f'''<div class="message {msg_class}">
 <div class="msg-header">
-<span class="bullet">•</span> <span class="label">[{label}]:</span> <span class="metadata">{metadata_str}</span>
+<span class="bullet">•</span> <span class="label">[{label}]:</span> <span class="metadata">{escape(metadata_str)}</span>
 </div>
 <div class="msg-content">{content_html}</div>
 <div class="msg-footer">
-<span class="uuid-small">ID: {uuid[-12:] if uuid else 'N/A'}</span>
-{f'<span class="cwd-small">CWD: {cwd}</span>' if cwd else ''}
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+{f'<span class="cwd-small">CWD: {escape(cwd)}</span>' if cwd else ''}
 </div>
 <div class="separator">{separator}</div>
 </div>
@@ -353,7 +793,7 @@ CONVERSATION SUMMARY
 
     return message_html
 
-def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None):
+def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = ""):
     """Generate the complete HTML document in terminal style."""
 
     # Count statistics (distinguishing tool_results)
@@ -361,23 +801,36 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     real_user_msgs = 0
     tool_result_msgs = 0
     assistant_msgs = 0
-    summaries = sum(1 for m in messages if m.get('type') == 'summary')
+    summaries = 0
     snapshots = sum(1 for m in messages if m.get('type') == 'file-history-snapshot')
 
     for m in messages:
-        if m.get('message', {}).get('role') == 'user':
+        if m.get('type') == 'summary':
+            summaries += 1
+        elif m.get('message', {}).get('role') == 'user':
             content = m.get('message', {}).get('content', [])
             if is_tool_result_message(content):
                 tool_result_msgs += 1
             else:
-                real_user_msgs += 1
+                text = _get_message_text(m)
+                if is_compact_summary(text):
+                    summaries += 1
+                else:
+                    real_user_msgs += 1
         elif m.get('message', {}).get('role') == 'assistant':
             assistant_msgs += 1
 
+    # Pre-process: group compact-related messages
+    processed_messages = group_compact_messages(messages)
+
     # Generate HTML for all messages
     messages_html = []
-    for i, msg in enumerate(messages):
-        msg_html = format_message_html(msg, i)
+    for i, msg in enumerate(processed_messages):
+        # Compact groups are rendered directly
+        if isinstance(msg, dict) and msg.get('_compact_group'):
+            msg_html = render_compact_block(msg)
+        else:
+            msg_html = format_message_html(msg, i)
         if msg_html:
             messages_html.append(msg_html)
 
@@ -390,7 +843,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
             dt = datetime.fromisoformat(chat_timestamp.replace('Z', '+00:00')).astimezone()
             chat_date = dt.strftime('%d/%m/%Y')
             chat_time = dt.strftime('%H:%M')
-        except:
+        except (ValueError, TypeError):
             chat_date = "N/A"
             chat_time = "N/A"
     else:
@@ -401,7 +854,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     header_actions_parts = []
     if dashboard_url:
         header_actions_parts.append(
-            f'<a href="{dashboard_url}" class="header-btn" title="Back to Dashboard">&#9664; Dashboard</a>'
+            f'<a href="{escape(dashboard_url)}" class="header-btn" title="Back to Dashboard">&#9664; Dashboard</a>'
         )
     header_actions_parts.append(
         '<a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" class="header-btn feedback" title="Send feedback">Feedback</a>'
@@ -412,7 +865,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     html_template = f'''<!DOCTYPE html>
 <!--
 =============================================================================
-Code Chat Viewer v2.1.1 - Professional Chat Log HTML Exporter
+Code Chat Viewer v2.2.0 - Professional Chat Log HTML Exporter
 Generated HTML Visualization
 =============================================================================
 
@@ -440,7 +893,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, VS Code, and AI coding assistants.">
     <meta name="keywords" content="Claude Code, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, code assistant history, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard, coding assistant logs">
 
-    <meta name="generator" content="Code Chat Viewer v2.1.1 - https://github.com/oskar-gm/code-chat-viewer">
+    <meta name="generator" content="Code Chat Viewer v2.2.0 - https://github.com/oskar-gm/code-chat-viewer">
     <meta name="robots" content="index, follow">
     <meta name="language" content="English, Spanish">
 
@@ -464,7 +917,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="publisher" content="nucleoia.es">
 
     <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
-    <title>Code Chat Viewer - Conversation</title>
+    <title>{escape(chat_title) + ' - ' if chat_title else ''}Code Chat Viewer</title>
     <style>
         * {{
             margin: 0;
@@ -502,6 +955,16 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             display: flex;
             align-items: center;
             gap: 10px;
+        }}
+
+        .chat-name {{
+            color: #FFFFFF;
+            font-weight: 500;
+            font-size: 13px;
+        }}
+
+        .chat-name-sep {{
+            color: #666;
         }}
 
         .terminal-controls {{
@@ -568,10 +1031,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             background: #FAFAFA;
             border-bottom: 1px solid #E0E0E0;
             padding: 8px 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }}
 
         .search-input {{
-            width: 100%;
+            flex: 1;
             padding: 8px 12px;
             border: 1px solid #CCCCCC;
             border-radius: 4px;
@@ -587,15 +1053,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         /* User message navigation */
-        .search-bar {{
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }}
-
-        .search-input {{
-            flex: 1;
-        }}
 
         .msg-nav {{
             display: flex;
@@ -754,10 +1211,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             color: #1E1E1E;
             white-space: pre-wrap;
             word-wrap: break-word;
-        }}
-
-        .blank-line {{
-            height: 0.4em;
         }}
 
         .tool-result-msg .msg-content {{
@@ -958,6 +1411,64 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             font-style: italic;
         }}
 
+        /* Command messages */
+        .command-msg {{
+            margin-bottom: 8px;
+        }}
+
+        /* Compact messages */
+        .compact-msg {{
+            margin-bottom: 8px;
+        }}
+        .compact-inner {{
+            background: #F5F3FF;
+            border-left: 3px solid #8B5CF6;
+            padding: 8px 10px;
+            border-radius: 4px;
+        }}
+        .compact-msg .compact-header {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .compact-msg .compact-header:hover {{
+            opacity: 0.85;
+        }}
+
+        /* AskUserQuestion result */
+        .ask-result-msg {{
+            margin-bottom: 8px;
+        }}
+        .ask-inner {{
+            background: #FFFBEB;
+            border-left: 3px solid #FCD34D;
+            padding: 8px 10px;
+            border-radius: 4px;
+        }}
+
+        /* Stdout messages */
+        .stdout-msg {{
+            margin-bottom: 8px;
+        }}
+
+        /* Nav-always highlight animations (specific per type) */
+        .message.compact-msg.nav-highlight {{
+            animation: navPulseCompact 1.5s ease-out;
+        }}
+        .message.ask-result-msg.nav-highlight {{
+            animation: navPulseAsk 1.5s ease-out;
+        }}
+        @keyframes navPulseCompact {{
+            0% {{ box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.5); }}
+            50% {{ box-shadow: 0 0 0 8px rgba(139, 92, 246, 0.2); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }}
+        }}
+        @keyframes navPulseAsk {{
+            0% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.5); }}
+            50% {{ box-shadow: 0 0 0 8px rgba(217, 119, 6, 0.2); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0); }}
+        }}
+
         /* Custom scrollbar */
         .terminal-content::-webkit-scrollbar {{
             width: 12px;
@@ -1002,6 +1513,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             <div class="terminal-title">
                 <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
                 <span>Code Chat Viewer</span>
+                {'<span class="chat-name-sep">|</span><span class="chat-name">' + escape(chat_title) + '</span>' if chat_title else ''}
             </div>
             <div class="header-actions">
                 {header_actions_html}
@@ -1066,9 +1578,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         let navObserver = null;
 
         function getNavSelector() {{
-            if (navMode === 'user') return '.message.user-msg:not(.nav-skip)';
-            if (navMode === 'assistant') return '.message.assistant-msg:not(.nav-skip)';
-            return '.message.user-msg:not(.nav-skip), .message.assistant-msg:not(.nav-skip)';
+            const always = ', .message.nav-always';
+            if (navMode === 'user') return '.message.user-msg:not(.nav-skip)' + always;
+            if (navMode === 'assistant') return '.message.assistant-msg:not(.nav-skip)' + always;
+            return '.message.user-msg:not(.nav-skip), .message.assistant-msg:not(.nav-skip)' + always;
         }}
 
         function initNavigation() {{
@@ -1277,7 +1790,7 @@ def generate_output_filename(input_file: str, messages: List[Dict]) -> str:
             date_str = dt.strftime('%Y-%m-%d')
             time_str = dt.strftime('%H-%M')
             return f"Chat {date_str} {time_str} {hash_short}.html"
-        except:
+        except (ValueError, TypeError):
             pass
 
     return f"Chat {hash_short}.html"
@@ -1288,14 +1801,12 @@ def _wait_if_interactive():
     When called from Claude Code or another process, stdout is piped
     so isatty() returns False and this does nothing.
     """
-    import os
     if sys.stdout.isatty() and os.name == 'nt':
         input("\nPress Enter to close...")
 
 
 def main():
     """Main entry point."""
-    import sys
 
     if len(sys.argv) < 2:
         print("Usage: python visualizer.py <json_file> [output.html]")

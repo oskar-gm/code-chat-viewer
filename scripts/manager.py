@@ -9,7 +9,7 @@ Reads configuration from config.json (see config.example.json for template).
 If config.json is not found, the script exits with setup instructions.
 Use with Claude Code for interactive configuration setup.
 
-Copyright (c) 2025 Óscar González Martín
+Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
 
 Author: Óscar González Martín
@@ -17,13 +17,19 @@ Repository: https://github.com/oskar-gm/code-chat-viewer
 """
 
 import json
+import os
+import re
 import shutil
 import sys
 import io
+import threading
+import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta
 from contextlib import redirect_stdout
 from html import escape
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -244,9 +250,43 @@ def needs_update(jsonl_path: Path, html_path: Path) -> bool:
     return jsonl_path.stat().st_mtime > html_path.stat().st_mtime
 
 
+def resolve_chat_title(jsonl_path: Path, sessions_meta: dict = None) -> str:
+    """Resolve the display title for a chat.
+
+    Uses the same resolution as the dashboard name column:
+      1. JSONL custom_title (set by /rename) — highest priority
+      2. sessions-index customTitle
+      3. sessions-index summary
+      4. JSONL first_prompt (truncated to 60 chars)
+      5. "Untitled"
+    """
+    hash_prefix = get_hash_from_filename(jsonl_path.name)
+    index_title = ""
+    first_prompt = ""
+
+    # sessions-index.json
+    if sessions_meta:
+        meta = sessions_meta.get(hash_prefix, {})
+        index_title = (meta.get("customTitle")
+                       or meta.get("summary")
+                       or "")
+        if not first_prompt:
+            first_prompt = (meta.get("firstPrompt") or "")[:60]
+
+    # JSONL metadata
+    jsonl_meta = extract_jsonl_metadata(jsonl_path)
+    if jsonl_meta.get("custom_title"):
+        return jsonl_meta["custom_title"]
+    if not first_prompt and jsonl_meta.get("first_prompt"):
+        first_prompt = jsonl_meta["first_prompt"][:60]
+
+    return index_title or first_prompt or "Untitled"
+
+
 def generate_chat_html(
     jsonl_path: Path, output_dir: Path, agent_suffix: str = "",
-    dashboard_filename: str = "CCV-Dashboard.html"
+    dashboard_filename: str = "CCV-Dashboard.html",
+    sessions_meta: dict = None
 ) -> tuple[str | None, str | None]:
     """Generate HTML for a single chat file.
 
@@ -271,8 +311,14 @@ def generate_chat_html(
 
         output_path = output_dir / base_name
 
+        chat_title = resolve_chat_title(jsonl_path, sessions_meta)
+
         with redirect_stdout(io.StringIO()):
-            generate_html(messages, str(output_path), dashboard_url=dashboard_filename)
+            generate_html(
+                messages, str(output_path),
+                dashboard_url=dashboard_filename,
+                chat_title=chat_title,
+            )
 
         return base_name, None
     except Exception as e:
@@ -299,6 +345,109 @@ def find_jsonl_for_html(projects_path: Path, html_name: str) -> Path | None:
                 if jsonl_hash == hash_prefix:
                     return jsonl_file
     return None
+
+
+# ---------------------------------------------------------------------------
+# Direct chat opening (--current / --name)
+# ---------------------------------------------------------------------------
+
+
+def find_current_jsonl(source_path: Path) -> Path | None:
+    """Auto-detect the current session JSONL from CWD.
+
+    Encodes the current working directory to the Claude Code project
+    directory format, then returns the most recently modified non-agent
+    JSONL in that project directory.
+    """
+    cwd = Path.cwd()
+    encoded = str(cwd).replace(":", "-").replace("\\", "-").replace("/", "-")
+
+    for project_dir in source_path.iterdir():
+        if not project_dir.is_dir():
+            continue
+        if encoded in project_dir.name:
+            jsonls = sorted(
+                [f for f in project_dir.glob("*.jsonl")
+                 if not f.name.startswith("agent-")],
+                key=lambda x: x.stat().st_mtime,
+                reverse=True,
+            )
+            return jsonls[0] if jsonls else None
+    return None
+
+
+def find_chat_by_name(
+    search_terms: str, source_path: Path, output_path: Path
+) -> Path | None:
+    """Find the HTML for a chat matching the search terms.
+
+    Matching is flexible: all search words must appear somewhere in the
+    chat's title/summary/prompt (case-insensitive, any order). Searches
+    from most recent to oldest and returns the first match.
+
+    Search sources (in order):
+      1. sessions-index.json (customTitle, summary, firstPrompt) — fast
+      2. JSONL custom_title for sessions not in the index — slower
+    """
+    search_words = search_terms.lower().split()
+    if not search_words:
+        return None
+
+    candidates = []  # (mtime, jsonl_path)
+    seen_sessions = set()
+
+    for project_dir in source_path.iterdir():
+        if not project_dir.is_dir():
+            continue
+
+        # 1. sessions-index.json (fast, already indexed)
+        index_file = project_dir / "sessions-index.json"
+        if index_file.exists():
+            try:
+                with open(index_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for entry in data.get("entries", []):
+                    sid = entry.get("sessionId", "")
+                    searchable = " ".join(filter(None, [
+                        entry.get("customTitle", ""),
+                        entry.get("summary", ""),
+                        entry.get("firstPrompt", ""),
+                    ])).lower()
+                    if all(w in searchable for w in search_words):
+                        jsonl_path = project_dir / f"{sid}.jsonl"
+                        mtime = (jsonl_path.stat().st_mtime
+                                 if jsonl_path.exists() else 0)
+                        candidates.append((mtime, jsonl_path))
+                        seen_sessions.add(sid)
+            except Exception:
+                pass
+
+        # 2. JSONL files not in the index
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            if jsonl_file.name.startswith("agent-"):
+                continue
+            sid = jsonl_file.stem
+            if sid in seen_sessions:
+                continue
+            meta = extract_jsonl_metadata(jsonl_file)
+            title = meta.get("custom_title", "")
+            if title and all(w in title.lower() for w in search_words):
+                candidates.append((jsonl_file.stat().st_mtime, jsonl_file))
+
+    if not candidates:
+        return None
+
+    # Most recent match
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best_jsonl = candidates[0][1]
+
+    hash_prefix = get_hash_from_filename(best_jsonl.name)
+    return find_existing_html(output_path, hash_prefix)
+
+
+def open_in_browser(path: Path):
+    """Open a file in the default browser."""
+    webbrowser.open(path.as_uri())
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +666,6 @@ def parse_html_filename(filename: str) -> dict:
 
     Expected format: 'Chat YYYY-MM-DD HH-MM hash.html'
     """
-    import re
-
     match = re.match(r"Chat (\d{4}-\d{2}-\d{2}) (\d{2}-\d{2})\s+(\S+)", filename)
     if match:
         date_str = match.group(1)
@@ -809,11 +956,11 @@ def generate_index(config: dict) -> int:
 <td class="name-cell" title="{escape(chat['summary'])}">{escape(chat['name'][:60])}{"..." if len(chat['name']) > 60 else ""}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
-<td class="category-cell {cat_class}">{chat['category']}</td>
-<td class="date-cell">{chat['created']}</td>
-<td class="date-cell">{chat['modified']}</td>
+<td class="category-cell {cat_class}">{escape(chat['category'])}</td>
+<td class="date-cell">{escape(str(chat['created']))}</td>
+<td class="date-cell">{escape(str(chat['modified']))}</td>
 {msgs_cell}
-<td class="hidden-col uuid-col">{chat['session_id'][:12]}...</td>
+<td class="hidden-col uuid-col">{escape(chat['session_id'][:12])}...</td>
 <td class="hidden-col branch-col">{escape(chat['branch'])}</td>
 <td class="hidden-col size-col">{chat['html_size'] // 1024}KB</td>
 <td class="hidden-col prompt-col" title="{escape(chat['first_prompt'])}">{escape(chat['first_prompt'][:40])}{"..." if len(chat['first_prompt']) > 40 else ""}</td>
@@ -862,7 +1009,7 @@ def generate_index(config: dict) -> int:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="Code Chat Viewer v2.1.1">
+    <meta name="generator" content="Code Chat Viewer v2.2.0">
     <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
     <title>Code Chat Viewer - Dashboard</title>
     <style>
@@ -975,12 +1122,27 @@ def generate_index(config: dict) -> int:
             border-radius: 4px;
             font-family: inherit;
             font-size: 13px;
-            width: 400px;
+            width: 280px;
         }}
 
         .search-input:focus {{
             outline: none;
             border-color: #007ACC;
+        }}
+
+        .exclude-input {{
+            padding: 6px 12px;
+            border: 1px solid #E8A0A0;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+            width: 200px;
+            background: #FFF8F8;
+        }}
+
+        .exclude-input:focus {{
+            outline: none;
+            border-color: #C06060;
         }}
 
         .filter-group {{
@@ -1168,6 +1330,7 @@ def generate_index(config: dict) -> int:
 
     <div class="toolbar">
         <input type="text" class="search-input" id="searchInput" placeholder="Filter by name, project...">
+        <input type="text" class="exclude-input" id="excludeInput" placeholder="Exclude...">
 
         <div class="filter-group">
             <span>Filter:</span>
@@ -1229,6 +1392,7 @@ def generate_index(config: dict) -> int:
                 ts: Date.now(),
                 sort: currentSort,
                 search: document.getElementById('searchInput').value,
+                exclude: document.getElementById('excludeInput').value,
                 filters: {{}},
                 columns: {{}}
             }};
@@ -1298,19 +1462,22 @@ def generate_index(config: dict) -> int:
 
         /* Search and filter */
         document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
+        document.getElementById('excludeInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
         {filter_js_listeners}
 
         function filterTable() {{
             const search = document.getElementById('searchInput').value.toLowerCase();
+            const exclude = document.getElementById('excludeInput').value.toLowerCase();
             {filter_js_vars}
 
             document.querySelectorAll('#chatsTable tbody tr').forEach(row => {{
                 const text = row.textContent.toLowerCase();
                 const category = row.querySelector('.category-cell')?.textContent || '';
                 const matchesSearch = !search || text.includes(search);
+                const matchesExclude = !exclude || !text.includes(exclude);
                 const matchesFilter =
                     {filter_js_conditions};
-                row.classList.toggle('hidden-row', !(matchesSearch && matchesFilter));
+                row.classList.toggle('hidden-row', !(matchesSearch && matchesExclude && matchesFilter));
             }});
         }}
 
@@ -1330,6 +1497,7 @@ def generate_index(config: dict) -> int:
         const saved = loadState();
         if (saved) {{
             if (saved.search) document.getElementById('searchInput').value = saved.search;
+            if (saved.exclude) document.getElementById('excludeInput').value = saved.exclude;
             Object.entries(saved.filters || {{}}).forEach(([id, checked]) => {{
                 const el = document.getElementById(id);
                 if (el) el.checked = checked;
@@ -1370,6 +1538,24 @@ def generate_index(config: dict) -> int:
 
 
 def main():
+    # Parse flags
+    name_search = None
+    current_mode = False
+    current_jsonl_path = None
+    force_regen = "--force" in sys.argv
+
+    if "--name" in sys.argv:
+        idx = sys.argv.index("--name")
+        if idx + 1 < len(sys.argv):
+            name_search = sys.argv[idx + 1]
+
+    if "--current" in sys.argv:
+        current_mode = True
+        idx = sys.argv.index("--current")
+        if (idx + 1 < len(sys.argv)
+                and not sys.argv[idx + 1].startswith("--")):
+            current_jsonl_path = Path(sys.argv[idx + 1])
+
     print()
     print("=" * 52)
     print("  Code Chat Viewer - Chat Manager")
@@ -1394,11 +1580,25 @@ def main():
         shutil.copy2(shortcut_src, shortcut_dst)
 
     stats = {"new": [], "updated": [], "skipped": 0, "errors": {}}
+    sessions_meta = build_sessions_index(source_path)
 
     print(f"  Source:  {source_path}")
     print(f"  Output:  {output_path}")
     print(f"  Config:  {config['_resolved']['config_path']}")
     print()
+
+    # Interactive mode selection (manual/double-click only)
+    if sys.stdout.isatty() and not name_search and not current_mode and not force_regen:
+        print("  [1] Normal — update only modified chats (fast)")
+        print("  [2] Force  — regenerate ALL chats from scratch (slow)")
+        print()
+        choice = input("  Select mode [1]: ").strip()
+        if choice == "2":
+            force_regen = True
+            print()
+            print("  Force mode: all chats will be regenerated.")
+        print()
+
     print("-" * 52)
     print("  Scanning chats...")
 
@@ -1440,11 +1640,11 @@ def main():
             existing_html = find_existing_html(output_path, hash_prefix, is_agent)
 
             if existing_html:
-                if needs_update(jsonl_file, existing_html):
+                if force_regen or needs_update(jsonl_file, existing_html):
                     existing_html.unlink()
                     result, error = generate_chat_html(
                         jsonl_file, chats_path, agent_suffix,
-                        f"../{index_filename}"
+                        f"../{index_filename}", sessions_meta,
                     )
                     if result:
                         print(f"  UPDATED: {display_name}")
@@ -1456,7 +1656,7 @@ def main():
             else:
                 result, error = generate_chat_html(
                     jsonl_file, chats_path, agent_suffix,
-                    f"../{index_filename}"
+                    f"../{index_filename}", sessions_meta,
                 )
                 if result:
                     print(f"  NEW:     {display_name}")
@@ -1517,15 +1717,62 @@ def main():
     print("=" * 52)
     print()
 
-    # Open dashboard in browser if running interactively, otherwise print path
-    import os
-    if sys.stdout.isatty():
-        import webbrowser
-        webbrowser.open(dashboard_path.as_uri())
-        if os.name == 'nt':
-            input("Press Enter to close...")
+    # Determine what to open
+    target_html = None
+
+    if name_search:
+        # --name: search by chat name (100% reliable)
+        target_html = find_chat_by_name(name_search, source_path, output_path)
+        if target_html:
+            print(f"  Match: {target_html.name}")
+        else:
+            print(f"  No chat found matching: {name_search}")
+
+    elif current_mode:
+        # --current: auto-detect or use explicit path
+        jsonl = current_jsonl_path or find_current_jsonl(source_path)
+        if jsonl and jsonl.exists():
+            hash_prefix = get_hash_from_filename(jsonl.name)
+            target_html = find_existing_html(output_path, hash_prefix)
+            if target_html:
+                print(f"  Current: {target_html.name}")
+            else:
+                print(f"  HTML not found for: {jsonl.name}")
+        else:
+            print("  Could not detect current session.")
+
+    if target_html:
+        open_in_browser(target_html)
+    elif sys.stdout.isatty():
+        open_in_browser(dashboard_path)
     else:
         print(f"  Dashboard: {dashboard_path}")
+
+    # Auto-close countdown in interactive mode (Windows terminal)
+    if sys.stdout.isatty() and os.name == 'nt':
+        _countdown_close(60)
+
+
+def _countdown_close(seconds: int):
+    """Show a countdown and close. Press Enter to close immediately."""
+    stop_event = threading.Event()
+
+    def wait_for_enter():
+        try:
+            input()
+        except EOFError:
+            pass
+        stop_event.set()
+
+    listener = threading.Thread(target=wait_for_enter, daemon=True)
+    listener.start()
+
+    for remaining in range(seconds, 0, -1):
+        print(f"\r  Closing in {remaining}s — press Enter to close now...", end="", flush=True)
+        if stop_event.wait(timeout=1):
+            break
+
+    print("\r" + " " * 60 + "\r", end="")
 
 
 if __name__ == "__main__":
