@@ -175,8 +175,8 @@ Each generated chat HTML includes:
 - **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, position counter, and keyboard shortcuts (N/P)
 - **Collapsible thinking blocks**: Collapsed by default with first-line preview; expand for full content
 - **Collapsible tool-use blocks**: Collapsed by default; expand for full untruncated content
-- **Smart message rendering**: Commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews)
-- **Color-coded highlights**: Blue for user, green for assistant, purple for compact, amber for user responses
+- **Smart message rendering**: Commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews), user rejections (`[REJECTED]` with feedback, coral/red), inline user comments (`[USER COMMENT]`, amber)
+- **Color-coded highlights**: Blue for user, green for assistant, purple for compact, amber for user responses/comments, red for rejections
 - **Smart scroll**: Centers short messages; pins long messages to top for readability
 - **Feedback button**: In header (highlighted) and footer
 - **Collapsible tool results**: Click to expand/collapse

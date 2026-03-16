@@ -270,6 +270,23 @@ def parse_ask_result(text: str) -> list:
 
     return results
 
+
+def parse_user_rejection(text: str) -> dict | None:
+    """Detect and parse a tool_use rejection with optional user feedback.
+
+    Returns dict with 'feedback' (user message or empty) and 'has_feedback' flag,
+    or None if not a rejection pattern.
+    """
+    if "doesn't want to proceed" not in text:
+        return None
+    feedback = ''
+    if 'the user said:\n' in text:
+        feedback = text.split('the user said:\n', 1)[1].strip()
+    elif 'the user said:' in text:
+        feedback = text.split('the user said:', 1)[1].strip()
+    return {'feedback': feedback, 'has_feedback': bool(feedback)}
+
+
 def _get_tool_result_text(item: dict) -> str:
     """Extract text from a tool_result item."""
     content = item.get('content', '')
@@ -361,7 +378,7 @@ def render_ask_result_block(qa_pairs: list, tool_use_id: str, uuid: str) -> str:
     content = ''.join(items_html)
     separator = '─' * 80
 
-    return f'''<div class="message ask-result-msg nav-always">
+    return f'''<div class="message user-msg ask-result-msg nav-always">
 <div class="ask-inner">
 <div class="msg-header">
 <span class="bullet" style="color:#D97706; font-size:14px;">&#10067;</span> <span class="label" style="color:#D97706;">[USER RESPONSE]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:]) if tool_use_id else 'N/A'}</span>
@@ -374,6 +391,39 @@ def render_ask_result_block(qa_pairs: list, tool_use_id: str, uuid: str) -> str:
 <div class="separator">{separator}</div>
 </div>
 '''
+
+
+def render_user_rejection_block(rejection: dict, tool_use_id: str, uuid: str) -> str:
+    """Render a tool_use rejection with optional user feedback.
+
+    Shows a coral/red indicator for the rejection, and if the user provided
+    feedback, displays it prominently as a user message.
+    """
+    separator = '─' * 80
+    feedback = rejection.get('feedback', '')
+
+    if feedback:
+        feedback_html = escape_html_preserve_structure(feedback)
+        return f'''<div class="message user-msg reject-msg nav-always">
+<div class="ask-inner" style="background:#FFF1F2; border-left:3px solid #F87171;">
+<div class="msg-header">
+<span class="bullet" style="color:#DC2626; font-size:14px;">&#10060;</span> <span class="label" style="color:#DC2626;">[REJECTED]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:]) if tool_use_id else 'N/A'}</span>
+</div>
+<div style="padding:6px 12px; color:#1E1E1E; white-space:normal; margin-left:15px;">
+<div style="font-weight:700; color:#991B1B; margin-bottom:4px;">User feedback:</div>
+<div style="color:#1E1E1E;">{feedback_html}</div>
+</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+    else:
+        return f'''<div class="message user-msg nav-skip"><div class="msg-content" style="color:#DC2626; background:#FFF1F2; border-left:3px solid #F87171; padding:6px 12px; margin-left:15px; font-size:12px; border-radius:4px;"><span style="font-weight:700;">&#10060;</span> <span style="font-weight:600;">[REJECTED]</span> Tool use rejected by user</div><div class="separator">{separator}</div></div>
+'''
+
 
 def render_compact_block(compact_data: dict) -> str:
     """Render a grouped compact block (collapsible, purple styling).
@@ -693,16 +743,30 @@ CONVERSATION SUMMARY
     # ====== DETECT TOOL_RESULT (NOT A REAL USER MESSAGE) ======
     if role == 'user' and is_tool_result_message(content):
         tool_results_html = []
+        # Collect inline user comments (text items alongside tool_results)
+        user_comments = []
         for item in content:
-            if isinstance(item, dict) and item.get('type') == 'tool_result':
-                # Check if this is an AskUserQuestion result
+            if isinstance(item, dict) and item.get('type') == 'text':
+                comment = item.get('text', '').strip()
+                if comment:
+                    user_comments.append(comment)
+            elif isinstance(item, dict) and item.get('type') == 'tool_result':
                 result_text = _get_tool_result_text(item)
+
+                # Check if this is an AskUserQuestion result
                 if result_text.startswith('User has answered your questions:'):
                     qa_pairs = parse_ask_result(result_text)
                     if qa_pairs:
                         tool_results_html.append(render_ask_result_block(
                             qa_pairs, item.get('tool_use_id', ''), uuid))
                         continue
+
+                # Check if this is a user rejection (with optional feedback)
+                rejection = parse_user_rejection(result_text)
+                if rejection:
+                    tool_results_html.append(render_user_rejection_block(
+                        rejection, item.get('tool_use_id', ''), uuid))
+                    continue
 
                 result_content = format_tool_result_content(item)
                 tool_use_id = item.get('tool_use_id', 'N/A')
@@ -716,6 +780,23 @@ CONVERSATION SUMMARY
 <span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
 </div>
 <div class="separator">{'─' * 80}</div>
+</div>''')
+
+        # Render inline user comments as a visible user feedback block
+        if user_comments:
+            comment_text = escape_html_preserve_structure('<br>'.join(user_comments))
+            separator = '─' * 80
+            tool_results_html.append(f'''<div class="message user-msg ask-result-msg nav-always">
+<div class="ask-inner">
+<div class="msg-header">
+<span class="bullet" style="color:#D97706; font-size:14px;">&#128172;</span> <span class="label" style="color:#D97706;">[USER COMMENT]</span>
+</div>
+<div style="padding:4px 12px; color:#1E1E1E; white-space:normal; margin-left:15px;">{comment_text}</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
 </div>''')
 
         return '\n'.join(tool_results_html)
@@ -1458,6 +1539,9 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .message.ask-result-msg.nav-highlight {{
             animation: navPulseAsk 1.5s ease-out;
         }}
+        .message.reject-msg.nav-highlight {{
+            animation: navPulseReject 1.5s ease-out;
+        }}
         @keyframes navPulseCompact {{
             0% {{ box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.5); }}
             50% {{ box-shadow: 0 0 0 8px rgba(139, 92, 246, 0.2); }}
@@ -1467,6 +1551,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             0% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.5); }}
             50% {{ box-shadow: 0 0 0 8px rgba(217, 119, 6, 0.2); }}
             100% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0); }}
+        }}
+        @keyframes navPulseReject {{
+            0% {{ box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }}
+            50% {{ box-shadow: 0 0 0 8px rgba(220, 38, 38, 0.2); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }}
         }}
 
         /* Custom scrollbar */

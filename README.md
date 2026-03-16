@@ -119,8 +119,8 @@ Configurable options:
 - Dashboard link in every chat for easy navigation back
 - Embedded favicon and header icon (self-contained, no external files needed)
 - Auto-opens dashboard in browser after generation
-- Smart message rendering: commands, compact blocks, task notifications, user responses with Q&A and markdown previews
-- Color-coded navigation highlights per message type (blue/green/purple/amber)
+- Smart message rendering: commands, compact blocks, task notifications, user responses with Q&A and markdown previews, user rejections with feedback, inline user comments
+- Color-coded navigation highlights per message type (blue/green/purple/amber/red)
 - CLI flags: `--name`, `--current`, `--force` for targeted operations
 - Chat title displayed in HTML header (resolved from session metadata)
 - Interactive mode selection (normal/force) for manual execution
@@ -132,8 +132,8 @@ Configurable options:
 ### What's New in v2.2
 
 **Chat viewer:**
-- Smart rendering: commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews)
-- Color-coded navigation highlights per message type: blue (user), green (assistant), purple (compact), amber (user response)
+- Smart rendering: commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews), user rejections (`[REJECTED]` with feedback, coral/red), inline user comments (`[USER COMMENT]`, amber)
+- Color-coded navigation highlights per message type: blue (user), green (assistant), purple (compact), amber (user response/comment), red (rejection)
 - Dashboard exclude filter: hide rows by text (complementary to search)
 - CLI flags: `--current` (auto-detect session), `--name` (search by name), `--force` (regenerate all)
 - Chat title displayed in HTML header (resolved from session metadata)
@@ -141,6 +141,7 @@ Configurable options:
 
 **Fixes:**
 - Summary counter now correctly detects summaries embedded in user messages
+- Special user blocks (responses, rejections, comments) correctly filter as user messages in navigation
 - Windows `\r\n` line endings no longer cause extra spacing in HTML output
 - All HTML variables properly escaped (XSS hardening)
 - Bare `except` clauses replaced with specific exception types
@@ -278,6 +279,8 @@ Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678
 - **Assistant messages**: Green (`#10893E`) with light green background (`#FAFFF8`)
 - **Commands**: Blue (`#0066CC`) with `[COMMAND]` label and deeper blue background (`#EBF2FF`)
 - **User responses**: Amber (`#D97706`) with Q&A layout, markdown previews, and `[USER RESPONSE]` label
+- **User rejections**: Coral/red (`#DC2626`) with `[REJECTED]` label and user feedback when provided (`#FFF1F2` background)
+- **User comments**: Amber (`#D97706`) with `[USER COMMENT]` label for inline comments on accepted actions
 - **Compact blocks**: Purple (`#8B5CF6`) collapsible blocks grouping summary + pre-compact output
 - **Task notifications**: Color-coded by status — green (completed), blue (in progress), gray (other)
 - **Tool results**: Orange (`#FF6B00`) with gray background (`#F8F8F8`)
@@ -414,8 +417,8 @@ Opciones configurables:
 - Enlace al panel en cada chat para volver fácilmente
 - Favicon e icono de cabecera embebidos (autocontenido, sin archivos externos)
 - Apertura automática del panel en el navegador tras la generación
-- Renderizado inteligente de mensajes: comandos, bloques compact, notificaciones de tareas, respuestas de usuario con Q&A y previews de markdown
-- Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar)
+- Renderizado inteligente de mensajes: comandos, bloques compact, notificaciones de tareas, respuestas de usuario con Q&A y previews de markdown, rechazos de usuario con feedback, comentarios inline del usuario
+- Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar/rojo)
 - Flags CLI: `--name`, `--current`, `--force` para operaciones dirigidas
 - Título del chat en el header del HTML (resuelto desde metadatos de sesión)
 - Selección de modo interactiva (normal/force) en ejecución manual
@@ -427,8 +430,8 @@ Opciones configurables:
 ### Novedades en v2.2
 
 **Visor de chats:**
-- Renderizado inteligente: comandos (`[COMMAND]`), bloques compact (colapsables, morado), notificaciones de tareas (color por estado), respuestas de usuario (ámbar con Q&A y previews de markdown)
-- Resaltado de navegación por color según tipo: azul (usuario), verde (asistente), morado (compact), ámbar (respuesta)
+- Renderizado inteligente: comandos (`[COMMAND]`), bloques compact (colapsables, morado), notificaciones de tareas (color por estado), respuestas de usuario (ámbar con Q&A y previews de markdown), rechazos de usuario (`[REJECTED]` con feedback, coral/rojo), comentarios inline (`[USER COMMENT]`, ámbar)
+- Resaltado de navegación por color según tipo: azul (usuario), verde (asistente), morado (compact), ámbar (respuesta/comentario), rojo (rechazo)
 - Filtro de exclusión en dashboard: ocultar filas por texto (complementario a la búsqueda)
 - Flags CLI: `--current` (auto-detectar sesión), `--name` (buscar por nombre), `--force` (regenerar todo)
 - Título del chat en el header del HTML (resuelto desde metadatos de sesión)
@@ -436,6 +439,7 @@ Opciones configurables:
 
 **Correcciones:**
 - Contador de summaries ahora detecta correctamente los summaries embebidos en mensajes de usuario
+- Bloques especiales de usuario (respuestas, rechazos, comentarios) se filtran correctamente como mensajes de usuario en navegación
 - Los saltos de línea `\r\n` de Windows ya no causan espaciado extra en el HTML
 - Todas las variables HTML correctamente escapadas (protección XSS)
 - Cláusulas `except` genéricas reemplazadas por excepciones específicas
@@ -573,6 +577,8 @@ Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def01234
 - **Mensajes del asistente**: Verde (`#10893E`) con fondo verde claro (`#FAFFF8`)
 - **Comandos**: Azul (`#0066CC`) con etiqueta `[COMMAND]` y fondo azul más marcado (`#EBF2FF`)
 - **Respuestas del usuario**: Ámbar (`#D97706`) con layout Q&A, previews de markdown y etiqueta `[USER RESPONSE]`
+- **Rechazos del usuario**: Coral/rojo (`#DC2626`) con etiqueta `[REJECTED]` y feedback del usuario cuando se proporciona (fondo `#FFF1F2`)
+- **Comentarios del usuario**: Ámbar (`#D97706`) con etiqueta `[USER COMMENT]` para comentarios inline en acciones aceptadas
 - **Bloques compact**: Morado (`#8B5CF6`) colapsables agrupando summary + salida pre-compact
 - **Notificaciones de tareas**: Color por estado — verde (completada), azul (en progreso), gris (otro)
 - **Resultados de herramientas**: Naranja (`#FF6B00`) con fondo gris (`#F8F8F8`)
