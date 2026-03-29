@@ -891,9 +891,18 @@ def collect_chats_data(config: dict) -> list[dict]:
                 modified_str = created_str
                 modified_sort = created_sort
 
+        # Full session ID: from sessions-index, JSONL filename, or hash prefix
+        if meta and meta.get("sessionId"):
+            session_id_full = meta["sessionId"]
+        elif jsonl_file and not jsonl_file.name.startswith("agent-"):
+            session_id_full = jsonl_file.stem
+        else:
+            session_id_full = hash_prefix
+
         chats_data.append(
             {
                 "session_id": hash_prefix,
+                "session_id_full": session_id_full,
                 "name": name,
                 "project": project,
                 "project_full": project_full,
@@ -952,15 +961,17 @@ def generate_index(config: dict) -> int:
         else:
             msgs_cell = '<td class="num-cell"><span class="tooltip"><span class="help-icon">?</span><span class="tooltip-text">No enriched data available. This chat is not indexed in Claude Code sessions-index.json. Common with old, very short, agent, or recently active sessions.</span></span></td>'
 
+        uuid_full = chat['session_id_full']
+
         rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}">
-<td class="name-cell" title="{escape(chat['summary'])}">{escape(chat['name'][:60])}{"..." if len(chat['name']) > 60 else ""}</td>
+<td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
 <td class="category-cell {cat_class}">{escape(chat['category'])}</td>
 <td class="date-cell">{escape(str(chat['created']))}</td>
 <td class="date-cell">{escape(str(chat['modified']))}</td>
 {msgs_cell}
-<td class="hidden-col uuid-col">{escape(chat['session_id'][:12])}...</td>
+<td class="hidden-col uuid-col" title="{escape(uuid_full)}"><span class="uuid-text">{escape(uuid_full)}</span> <button class="copy-btn" onclick="copyUuid(this)" title="Copy UUID"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></td>
 <td class="hidden-col branch-col">{escape(chat['branch'])}</td>
 <td class="hidden-col size-col">{chat['html_size'] // 1024}KB</td>
 <td class="hidden-col prompt-col" title="{escape(chat['first_prompt'])}">{escape(chat['first_prompt'][:40])}{"..." if len(chat['first_prompt']) > 40 else ""}</td>
@@ -1282,7 +1293,36 @@ def generate_index(config: dict) -> int:
         .date-cell {{ white-space: nowrap; font-size: 11px; color: #666; }}
         .num-cell {{ text-align: right; font-family: monospace; }}
         .hidden-col {{ display: none; }}
-        .uuid-col {{ font-family: monospace; font-size: 10px; color: #999; }}
+        .uuid-col {{
+            font-family: monospace;
+            font-size: 10px;
+            color: #999;
+            max-width: 140px;
+            white-space: nowrap;
+        }}
+        .uuid-col .uuid-text {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: inline-block;
+            max-width: 100px;
+            vertical-align: middle;
+        }}
+        .copy-btn {{
+            background: none;
+            border: 1px solid #DDD;
+            border-radius: 3px;
+            cursor: pointer;
+            padding: 2px 4px;
+            color: #999;
+            vertical-align: middle;
+            line-height: 1;
+            transition: all 0.15s;
+        }}
+        .copy-btn:hover {{
+            background: #F0F0F0;
+            border-color: #999;
+            color: #333;
+        }}
 
         .prompt-col {{
             max-width: 200px;
@@ -1521,6 +1561,15 @@ def generate_index(config: dict) -> int:
         }}
 
         filterTable();
+
+        /* Copy UUID to clipboard */
+        function copyUuid(btn) {{
+            const uuid = btn.closest('.uuid-col').querySelector('.uuid-text').textContent;
+            navigator.clipboard.writeText(uuid);
+            const orig = btn.innerHTML;
+            btn.textContent = 'OK';
+            setTimeout(function() {{ btn.innerHTML = orig; }}, 1000);
+        }}
     </script>
 </body>
 </html>'''

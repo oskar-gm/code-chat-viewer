@@ -111,7 +111,9 @@ Configurable options:
 - Smart scroll: centers short messages, pins long messages to top
 - Dashboard state persistence (sort, filters, search, columns) via localStorage
 - Security-safe HTML rendering (escaped tool parameters)
-- Interactive dashboard with sortable table, search, exclude filter, and category filters
+- Interactive dashboard with sortable table, full-text search, exclude filter, and category filters
+- Full chat names visible on hover; complete names and UUIDs searchable even when truncated
+- UUID copy button in dashboard for quick session ID access
 - Batch generation with incremental updates (only regenerates changed chats)
 - Accurate timestamps and message counts read directly from JSONL files
 - Automatic filtering of snapshot-only entries (Claude Code's undo system)
@@ -409,7 +411,9 @@ Opciones configurables:
 - Scroll inteligente: centra mensajes cortos, fija al inicio los largos
 - Persistencia de estado del dashboard (orden, filtros, búsqueda, columnas) vía localStorage
 - Renderizado HTML seguro (parámetros de herramientas escapados)
-- Panel interactivo con tabla ordenable, búsqueda, filtro de exclusión y filtros por categoría
+- Panel interactivo con tabla ordenable, búsqueda de texto completo, filtro de exclusión y filtros por categoría
+- Nombres de chats completos visibles en hover; nombres y UUIDs completos buscables aunque estén truncados
+- Botón de copiar UUID en el dashboard para acceso rápido al ID de sesión
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
 - Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
 - Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)

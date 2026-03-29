@@ -155,10 +155,12 @@ Each project subdirectory contains:
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
 - **Sortable table**: Click column headers to sort (default: last used, descending)
-- **Filter**: Filter by text across all columns
+- **Full-text search**: Filter and exclude search across complete chat names and UUIDs (not just visible truncated text)
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
-- **Optional columns**: UUID, Branch, Size, First Prompt (toggle with checkboxes)
+- **Optional columns**: UUID (with copy button), Branch, Size, First Prompt (toggle with checkboxes)
+- **Name tooltips**: Hover to see full chat name when truncated in the table
+- **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
 - **Direct links**: Icon to open each chat HTML file
 - **Enriched data**: Uses `sessions-index.json` and direct JSONL parsing for name, summary, message count, git branch
 - **State persistence**: Remembers sort order, filters, search text, exclude text, and visible columns via localStorage (5h TTL)
