@@ -1612,6 +1612,30 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         /* ====== Edit controls in search bar ====== */
+        .edit-ctrl-group {{
+            display: inline-flex;
+            gap: 2px;
+            align-items: center;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn {{
+            border-radius: 0;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn:first-child {{
+            border-top-left-radius: 3px;
+            border-bottom-left-radius: 3px;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn:last-child {{
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }}
+
+        .edit-ctrl-btn-theme {{
+            border-left-width: 0 !important;
+        }}
+
         .edit-ctrl-btn {{
             background: #F0F0F0;
             border: 1px solid #CCCCCC;
@@ -1885,13 +1909,15 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         <div class="search-bar">
             <input type="text" class="search-input" id="searchInput" placeholder="Filter conversation...">
-            <button class="edit-ctrl-btn" id="editToggleCollapse" title="Expand / collapse all Edit blocks">
-                <span class="edit-ctrl-icon" id="editToggleIcon">&#9654;</span>
-                <span id="editToggleLabel">Edits</span>
-            </button>
-            <button class="edit-ctrl-btn" id="editToggleTheme" title="Toggle Edit diff theme (dark / light)">
-                <span id="editToggleThemeLabel">Light</span>
-            </button>
+            <div class="edit-ctrl-group">
+                <button class="edit-ctrl-btn" id="editToggleCollapse" title="Expand / collapse all Edit blocks">
+                    <span class="edit-ctrl-icon" id="editToggleIcon">&#9654;</span>
+                    <span id="editToggleLabel">Edits</span>
+                </button>
+                <button class="edit-ctrl-btn edit-ctrl-btn-theme" id="editToggleTheme" title="Toggle Edit diff theme (dark / light)">
+                    <span id="editToggleThemeLabel">Light</span>
+                </button>
+            </div>
             <div class="msg-nav">
                 <button class="nav-mode-btn active" id="navAll" title="All messages">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><defs><linearGradient id="navGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0066CC"/><stop offset="100%" stop-color="#10893E"/></linearGradient></defs><path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/></svg>
