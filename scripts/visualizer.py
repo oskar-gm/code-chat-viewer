@@ -2064,13 +2064,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         // ====== SEARCH ======
         document.getElementById('searchInput').addEventListener('input', function(e) {{
             const searchTerm = e.target.value.toLowerCase();
-            const messages = document.querySelectorAll('.message, .summary-msg, .tool-result-msg');
+            const messages = document.querySelectorAll('.message, .summary-msg, .tool-result-msg, .snapshot');
 
             let visibleCount = 0;
             messages.forEach(message => {{
                 const text = message.textContent.toLowerCase();
                 if (text.includes(searchTerm)) {{
-                    message.style.display = 'block';
+                    message.style.display = '';
                     visibleCount++;
                 }} else {{
                     message.style.display = 'none';
