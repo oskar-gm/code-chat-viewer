@@ -609,6 +609,71 @@ def render_ask_tool_use(tool_id: str, tool_input: dict) -> str:
 </div></details>'''
 
 
+def render_edit_tool_use(tool_id: str, tool_name: str, tool_input: dict) -> str:
+    """Render Edit / MultiEdit tool_use with a two-column diff view (old vs new)."""
+    file_path = tool_input.get('file_path', '')
+
+    if tool_name == 'MultiEdit':
+        edits = tool_input.get('edits', []) or []
+    else:  # Edit (or Write fallback uses main path)
+        edits = [{
+            'old_string': tool_input.get('old_string', ''),
+            'new_string': tool_input.get('new_string', ''),
+            'replace_all': tool_input.get('replace_all', False),
+        }]
+
+    if not edits:
+        return None
+
+    file_hint = f' <span class="tool-use-hint">&mdash; {escape(file_path)}</span>' if file_path else ''
+    summary = f'Tool: {escape(tool_name)}{file_hint}'
+
+    meta_lines = [f'   ID: {escape(tool_id[:16])}...']
+    if file_path:
+        meta_lines.append(f'   file_path: {escape(file_path)}')
+    metadata = '<br>'.join(meta_lines)
+
+    total = len(edits)
+    diff_blocks = []
+    for idx, edit in enumerate(edits):
+        old_s = edit.get('old_string', '') or ''
+        new_s = edit.get('new_string', '') or ''
+        replace_all = bool(edit.get('replace_all', False))
+
+        label_html = ''
+        if total > 1:
+            label_html = f'<div class="edit-diff-label">&#9472;&#9472; Edit {idx + 1}/{total} &#9472;&#9472;</div>'
+
+        badge_html = ''
+        if replace_all:
+            badge_html = ' <span class="edit-replace-all">replace_all</span>'
+
+        diff_blocks.append(
+            f'{label_html}'
+            f'<div class="edit-diff">'
+            f'<div class="edit-diff-col edit-diff-old">'
+            f'<div class="edit-diff-head">old_string:{badge_html}</div>'
+            f'<pre class="edit-diff-body">{escape(old_s)}</pre>'
+            f'</div>'
+            f'<div class="edit-diff-col edit-diff-new">'
+            f'<div class="edit-diff-head">new_string:</div>'
+            f'<pre class="edit-diff-body">{escape(new_s)}</pre>'
+            f'</div>'
+            f'</div>'
+        )
+
+    diff_html = ''.join(diff_blocks)
+
+    return (
+        f'<details class="tool-use tool-use-edit" data-tool-name="{escape(tool_name)}">'
+        f'<summary>{summary}</summary>'
+        f'<div class="tool-use-content" style="white-space:normal;">'
+        f'{metadata}'
+        f'<div class="edit-diff-container">{diff_html}</div>'
+        f'</div></details>'
+    )
+
+
 def format_content_item(item) -> str:
     """Format an individual content item."""
     if isinstance(item, str):
@@ -641,6 +706,12 @@ def format_content_item(item) -> str:
             ask_html = render_ask_tool_use(tool_id, tool_input)
             if ask_html:
                 return ask_html
+
+        # Special rendering for Edit / MultiEdit with diff view
+        if tool_name in ('Edit', 'MultiEdit'):
+            edit_html = render_edit_tool_use(tool_id, tool_name, tool_input)
+            if edit_html:
+                return edit_html
 
         input_lines = []
         for key, value in tool_input.items():
@@ -874,7 +945,7 @@ CONVERSATION SUMMARY
 
     return message_html
 
-def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = ""):
+def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = "", chat_uuid: str = ""):
     """Generate the complete HTML document in terminal style."""
 
     # Count statistics (distinguishing tool_results)
@@ -1416,6 +1487,189 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             overflow-wrap: break-word;
         }}
 
+        .tool-use-hint {{
+            color: #9A9A9C;
+            font-weight: 400;
+            font-size: 12px;
+        }}
+
+        /* ====== Edit / MultiEdit diff view ====== */
+        .edit-diff-container {{
+            margin-top: 8px;
+        }}
+
+        .edit-diff {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin: 6px 0;
+        }}
+
+        .edit-diff-col {{
+            background: #3A3A3C;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }}
+
+        .edit-diff-old {{
+            border-left: 3px solid #D16969;
+        }}
+
+        .edit-diff-new {{
+            border-left: 3px solid #6AB06F;
+        }}
+
+        .edit-diff-head {{
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(0,0,0,0.22);
+            border-bottom: 1px solid rgba(0,0,0,0.3);
+            font-family: 'Consolas', 'Courier New', monospace;
+        }}
+
+        .edit-diff-old .edit-diff-head {{
+            color: #FFB3B3;
+        }}
+
+        .edit-diff-new .edit-diff-head {{
+            color: #B3F0BD;
+        }}
+
+        .edit-diff-body {{
+            padding: 8px;
+            margin: 0;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+            max-height: 420px;
+            overflow-y: auto;
+        }}
+
+        .edit-diff-old .edit-diff-body {{
+            color: #FFB3B3;
+        }}
+
+        .edit-diff-new .edit-diff-body {{
+            color: #B3F0BD;
+        }}
+
+        .edit-diff-label {{
+            font-size: 11px;
+            color: #BBB;
+            margin: 10px 0 4px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            letter-spacing: 0.5px;
+        }}
+
+        .edit-replace-all {{
+            background: #5A5A5C;
+            color: #FFD699;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 500;
+            margin-left: 4px;
+            letter-spacing: 0.3px;
+        }}
+
+        /* Light theme (toggle A) */
+        body.edit-diff-light .edit-diff-old {{
+            background: #FFE4E4;
+            border-left-color: #C42B1C;
+        }}
+        body.edit-diff-light .edit-diff-new {{
+            background: #DFF7E0;
+            border-left-color: #107C10;
+        }}
+        body.edit-diff-light .edit-diff-old .edit-diff-head {{
+            background: rgba(196,43,28,0.14);
+            color: #8B0000;
+            border-bottom-color: rgba(196,43,28,0.22);
+        }}
+        body.edit-diff-light .edit-diff-new .edit-diff-head {{
+            background: rgba(16,124,16,0.14);
+            color: #0A5F0A;
+            border-bottom-color: rgba(16,124,16,0.22);
+        }}
+        body.edit-diff-light .edit-diff-old .edit-diff-body {{
+            color: #8B0000;
+        }}
+        body.edit-diff-light .edit-diff-new .edit-diff-body {{
+            color: #0A5F0A;
+        }}
+
+        @media (max-width: 900px) {{
+            .edit-diff {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+
+        /* ====== Edit controls in search bar ====== */
+        .edit-ctrl-btn {{
+            background: #F0F0F0;
+            border: 1px solid #CCCCCC;
+            border-radius: 3px;
+            height: 28px;
+            padding: 0 10px;
+            cursor: pointer;
+            font-size: 11px;
+            color: #333;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-family: inherit;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }}
+
+        .edit-ctrl-btn:hover {{
+            background: #E4E4E4;
+            border-color: #AAA;
+        }}
+
+        .edit-ctrl-btn:active {{
+            transform: scale(0.97);
+        }}
+
+        .edit-ctrl-btn .edit-ctrl-icon {{
+            font-size: 10px;
+            font-family: 'Consolas', monospace;
+            line-height: 1;
+        }}
+
+        .edit-ctrl-btn.is-light {{
+            background: #FFF5E1;
+            border-color: #E0B060;
+            color: #7A4E00;
+        }}
+
+        /* ====== Chat UUID in header ====== */
+        .chat-uuid {{
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 11px;
+            color: #9AAFC4;
+            user-select: all;
+            padding: 3px 8px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid #444;
+            border-radius: 3px;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }}
+
+        @media (max-width: 900px) {{
+            .chat-uuid {{
+                display: none;
+            }}
+        }}
+
         .msg-footer {{
             padding-left: 15px;
             margin-top: 3px;
@@ -1605,6 +1859,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 {'<span class="chat-name-sep">|</span><span class="chat-name">' + escape(chat_title) + '</span>' if chat_title else ''}
             </div>
             <div class="header-actions">
+                {('<span class="chat-uuid" title="Chat UUID (click to select)">' + escape(chat_uuid) + '</span>') if chat_uuid else ''}
                 {header_actions_html}
             </div>
             <div class="terminal-controls">
@@ -1630,6 +1885,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         <div class="search-bar">
             <input type="text" class="search-input" id="searchInput" placeholder="Filter conversation...">
+            <button class="edit-ctrl-btn" id="editToggleCollapse" title="Expand / collapse all Edit blocks">
+                <span class="edit-ctrl-icon" id="editToggleIcon">&#9654;</span>
+                <span id="editToggleLabel">Edits</span>
+            </button>
+            <button class="edit-ctrl-btn" id="editToggleTheme" title="Toggle Edit diff theme (dark / light)">
+                <span id="editToggleThemeLabel">Light</span>
+            </button>
             <div class="msg-nav">
                 <button class="nav-mode-btn active" id="navAll" title="All messages">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><defs><linearGradient id="navGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0066CC"/><stop offset="100%" stop-color="#10893E"/></linearGradient></defs><path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/></svg>
@@ -1835,6 +2097,44 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             }});
         }});
 
+        // ====== Edit blocks: expand / collapse all ======
+        (function() {{
+            const btn = document.getElementById('editToggleCollapse');
+            if (!btn) return;
+            const icon = document.getElementById('editToggleIcon');
+            const getEdits = () => document.querySelectorAll('details.tool-use-edit');
+            const refresh = () => {{
+                const edits = getEdits();
+                const anyOpen = Array.from(edits).some(d => d.open);
+                icon.innerHTML = anyOpen ? '&#9660;' : '&#9654;';
+            }};
+            btn.addEventListener('click', function() {{
+                const edits = getEdits();
+                if (!edits.length) return;
+                const anyOpen = Array.from(edits).some(d => d.open);
+                edits.forEach(d => {{ d.open = !anyOpen; }});
+                refresh();
+            }});
+            document.addEventListener('toggle', function(e) {{
+                if (e.target && e.target.classList && e.target.classList.contains('tool-use-edit')) {{
+                    refresh();
+                }}
+            }}, true);
+            refresh();
+        }})();
+
+        // ====== Edit diff: theme toggle (dark default / light) ======
+        (function() {{
+            const btn = document.getElementById('editToggleTheme');
+            if (!btn) return;
+            const label = document.getElementById('editToggleThemeLabel');
+            btn.addEventListener('click', function() {{
+                const isLight = document.body.classList.toggle('edit-diff-light');
+                btn.classList.toggle('is-light', isLight);
+                label.textContent = isLight ? 'Dark' : 'Light';
+            }});
+        }})();
+
         // Scroll to top on load
         window.addEventListener('load', function() {{
             const content = document.getElementById('terminalContent');
@@ -1920,7 +2220,8 @@ def main():
         print(f"Generated filename: {output_file}")
 
     print(f"Generating HTML in terminal style...")
-    generate_html(messages, output_file)
+    chat_uuid = Path(input_file).stem
+    generate_html(messages, output_file, chat_uuid=chat_uuid)
 
     print(f"\nConversion completed!")
     print(f"Open file: {output_file}")

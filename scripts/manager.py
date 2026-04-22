@@ -318,6 +318,7 @@ def generate_chat_html(
                 messages, str(output_path),
                 dashboard_url=dashboard_filename,
                 chat_title=chat_title,
+                chat_uuid=jsonl_path.stem,
             )
 
         return base_name, None
