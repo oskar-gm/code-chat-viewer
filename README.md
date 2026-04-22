@@ -148,6 +148,7 @@ Configurable options:
 - Interactive mode selection (normal/force) for manual execution
 
 **Fixes:**
+- Snapshot entries (`[Snapshot saved: ...]`) now honor the search filter — previously they stayed visible regardless of the query
 - Summary counter now correctly detects summaries embedded in user messages
 - Special user blocks (responses, rejections, comments) correctly filter as user messages in navigation
 - Windows `\r\n` line endings no longer cause extra spacing in HTML output
@@ -454,6 +455,7 @@ Opciones configurables:
 - Selección de modo interactiva (normal/force) en ejecución manual
 
 **Correcciones:**
+- Las entradas snapshot (`[Snapshot saved: ...]`) ahora respetan el filtro de búsqueda — antes permanecían visibles independientemente de lo buscado
 - Contador de summaries ahora detecta correctamente los summaries embebidos en mensajes de usuario
 - Bloques especiales de usuario (respuestas, rechazos, comentarios) se filtran correctamente como mensajes de usuario en navegación
 - Los saltos de línea `\r\n` de Windows ya no causan espaciado extra en el HTML
