@@ -1675,21 +1675,52 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         /* ====== Chat UUID in header ====== */
+        .chat-uuid-wrap {{
+            display: inline-flex;
+            align-items: stretch;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid #444;
+            border-radius: 3px;
+            overflow: hidden;
+        }}
+
         .chat-uuid {{
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
             color: #9AAFC4;
             user-select: all;
             padding: 3px 8px;
-            background: rgba(255,255,255,0.04);
-            border: 1px solid #444;
-            border-radius: 3px;
             letter-spacing: 0.3px;
             white-space: nowrap;
+            line-height: 18px;
+        }}
+
+        .chat-uuid-copy {{
+            background: none;
+            border: none;
+            border-left: 1px solid #444;
+            cursor: pointer;
+            padding: 0 7px;
+            color: #9AAFC4;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 10px;
+        }}
+
+        .chat-uuid-copy:hover {{
+            background: rgba(255,255,255,0.08);
+            color: #FFF;
+        }}
+
+        .chat-uuid-copy.copied {{
+            color: #6AB06F;
         }}
 
         @media (max-width: 900px) {{
-            .chat-uuid {{
+            .chat-uuid-wrap {{
                 display: none;
             }}
         }}
@@ -1883,7 +1914,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 {'<span class="chat-name-sep">|</span><span class="chat-name">' + escape(chat_title) + '</span>' if chat_title else ''}
             </div>
             <div class="header-actions">
-                {('<span class="chat-uuid" title="Chat UUID (click to select)">' + escape(chat_uuid) + '</span>') if chat_uuid else ''}
+                {('<span class="chat-uuid-wrap" title="Chat UUID"><span class="chat-uuid">' + escape(chat_uuid) + '</span><button class="chat-uuid-copy" onclick="copyChatUuid(this)" title="Copy UUID"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/></svg></button></span>') if chat_uuid else ''}
                 {header_actions_html}
             </div>
             <div class="terminal-controls">
@@ -2122,6 +2153,20 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 }}
             }});
         }});
+
+        // ====== Chat UUID: copy to clipboard ======
+        function copyChatUuid(btn) {{
+            const uuid = btn.parentNode.querySelector('.chat-uuid').textContent;
+            navigator.clipboard.writeText(uuid).then(function() {{
+                const orig = btn.innerHTML;
+                btn.innerHTML = '✓';
+                btn.classList.add('copied');
+                setTimeout(function() {{
+                    btn.innerHTML = orig;
+                    btn.classList.remove('copied');
+                }}, 1200);
+            }});
+        }}
 
         // ====== Edit blocks: expand / collapse all ======
         (function() {{

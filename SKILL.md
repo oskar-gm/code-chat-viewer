@@ -172,7 +172,7 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 Each generated chat HTML includes:
 
 - **Chat title in header**: Displays the chat name next to "Code Chat Viewer" (resolved from custom title, session index, or first prompt)
-- **Chat UUID in header**: Full session UUID shown on the right side of the header, selectable for quick copy
+- **Chat UUID in header**: Full session UUID shown on the right side of the header. Selectable text plus a one-click SVG copy button (visual confirmation on copy)
 - **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
 - **Conversation filter**: Filter messages by text content
 - **Edit diff view**: `Tool: Edit` and `Tool: MultiEdit` blocks render `old_string` vs `new_string` side-by-side inside the tool-use box, with red/green color coding (Dark theme by default, Light theme toggle available)

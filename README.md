@@ -127,7 +127,7 @@ Configurable options:
 - Color-coded navigation highlights per message type (blue/green/purple/amber/red)
 - CLI flags: `--name`, `--current`, `--force` for targeted operations
 - Chat title displayed in HTML header (resolved from session metadata)
-- Chat UUID displayed on the right side of the header, selectable for quick copy
+- Chat UUID displayed on the right side of the header, with selectable text and a one-click SVG copy button
 - Interactive mode selection (normal/force) for manual execution
 - Full interactive setup with all options configurable
 - Scan progress indicator with summary
@@ -140,7 +140,7 @@ Configurable options:
 - Smart rendering: commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews), user rejections (`[REJECTED]` with feedback, coral/red), inline user comments (`[USER COMMENT]`, amber)
 - Edit / MultiEdit diff view: `old_string` and `new_string` rendered side-by-side inside the tool-use box, with red/green color coding. Dark theme by default, Light theme toggle available in the search bar
 - Expand/collapse all Edits: one-click button in the search bar to open or close every Edit block at once (affects only Edits, not other tools)
-- Chat UUID in header: full session UUID displayed on the right side of the terminal header, selectable for quick copy
+- Chat UUID in header: full session UUID displayed on the right side of the terminal header, with selectable text and a one-click SVG copy button (visual confirmation on copy)
 - Color-coded navigation highlights per message type: blue (user), green (assistant), purple (compact), amber (user response/comment), red (rejection)
 - Dashboard exclude filter: hide rows by text (complementary to search)
 - CLI flags: `--current` (auto-detect session), `--name` (search by name), `--force` (regenerate all)
@@ -434,7 +434,7 @@ Opciones configurables:
 - Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar/rojo)
 - Flags CLI: `--name`, `--current`, `--force` para operaciones dirigidas
 - Título del chat en el header del HTML (resuelto desde metadatos de sesión)
-- UUID del chat en el lado derecho del header, seleccionable para copia rápida
+- UUID del chat en el lado derecho del header, con texto seleccionable y botón SVG de copia con un clic
 - Selección de modo interactiva (normal/force) en ejecución manual
 - Setup interactivo completo con todas las opciones configurables
 - Indicador de progreso del escaneo con resumen
@@ -447,7 +447,7 @@ Opciones configurables:
 - Renderizado inteligente: comandos (`[COMMAND]`), bloques compact (colapsables, morado), notificaciones de tareas (color por estado), respuestas de usuario (ámbar con Q&A y previews de markdown), rechazos de usuario (`[REJECTED]` con feedback, coral/rojo), comentarios inline (`[USER COMMENT]`, ámbar)
 - Vista diff para Edit / MultiEdit: `old_string` y `new_string` en dos columnas dentro del recuadro tool-use, con codificación de color rojo/verde. Tema oscuro por defecto y toggle de tema claro disponible en la barra de búsqueda
 - Expandir/contraer todos los Edits: botón en la barra de búsqueda para abrir o cerrar todos los bloques Edit de una vez (afecta solo a Edits, no a otras tools)
-- UUID del chat en el header: UUID completo de la sesión a la derecha del header del terminal, seleccionable para copia rápida
+- UUID del chat en el header: UUID completo de la sesión a la derecha del header del terminal, con texto seleccionable y botón SVG de copia con un clic (confirmación visual al copiar)
 - Resaltado de navegación por color según tipo: azul (usuario), verde (asistente), morado (compact), ámbar (respuesta/comentario), rojo (rechazo)
 - Filtro de exclusión en dashboard: ocultar filas por texto (complementario a la búsqueda)
 - Flags CLI: `--current` (auto-detectar sesión), `--name` (buscar por nombre), `--force` (regenerar todo)
