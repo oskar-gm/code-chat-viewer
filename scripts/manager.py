@@ -984,7 +984,7 @@ def generate_index(config: dict) -> int:
         else:
             msgs_cell = '<td class="num-cell"><span class="tooltip"><span class="help-icon">?</span><span class="tooltip-text">No enriched data available. This chat is not indexed in Claude Code sessions-index.json. Common with old, very short, agent, or recently active sessions.</span></span></td>'
 
-        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}">
+        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-size="{chat['html_size']}">
 <td class="name-cell" title="{escape(chat['summary'])}">{escape(chat['name'][:60])}{"..." if len(chat['name']) > 60 else ""}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
@@ -1398,11 +1398,11 @@ def generate_index(config: dict) -> int:
                     <th data-sort="created">Created</th>
                     <th data-sort="modified" class="sorted-desc">Last Used</th>
                     <th data-sort="messages">Msgs</th>
-                    <th class="hidden-col uuid-col" data-sort="none">UUID</th>
+                    <th class="hidden-col uuid-col" data-sort="uuid">UUID</th>
                     <th class="hidden-col branch-col" data-sort="branch">Branch</th>
-                    <th class="hidden-col size-col" data-sort="none">Size</th>
-                    <th class="hidden-col prompt-col" data-sort="none">First prompt</th>
-                    <th class="recap-col" data-sort="none">Recap</th>
+                    <th class="hidden-col size-col" data-sort="size">Size</th>
+                    <th class="hidden-col prompt-col" data-sort="prompt">First prompt</th>
+                    <th class="recap-col" data-sort="recap">Recap</th>
                 </tr>
             </thead>
             <tbody>
@@ -1482,8 +1482,11 @@ def generate_index(config: dict) -> int:
                 }} else if (col === 'messages') {{
                     aVal = parseInt(a.dataset.messages) || 0;
                     bVal = parseInt(b.dataset.messages) || 0;
+                }} else if (col === 'size') {{
+                    aVal = parseInt(a.dataset.size) || 0;
+                    bVal = parseInt(b.dataset.size) || 0;
                 }} else {{
-                    const colIndex = {{ name: 0, project: 2, category: 3, branch: 8 }}[col] || 0;
+                    const colIndex = {{ name: 0, project: 2, category: 3, uuid: 7, branch: 8, prompt: 10, recap: 11 }}[col] || 0;
                     aVal = a.cells[colIndex]?.textContent.toLowerCase() || '';
                     bVal = b.cells[colIndex]?.textContent.toLowerCase() || '';
                 }}
