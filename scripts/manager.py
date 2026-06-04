@@ -170,6 +170,16 @@ def load_config() -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    # Env var override for output folder (takes precedence over config.json).
+    # Lets users centralize the location across machines without editing the
+    # tracked config file.
+    env_output = os.environ.get("CODE_CHAT_VIEWER_DIR")
+    if env_output:
+        config["output"]["folder"] = env_output
+        config["_output_source"] = "env"
+    else:
+        config["_output_source"] = "config"
+
     # Resolve paths
     source_path = Path(config["source"]["projects_path"]).expanduser().resolve()
     output_path = Path(config["output"]["folder"]).expanduser()
@@ -318,6 +328,7 @@ def generate_chat_html(
                 messages, str(output_path),
                 dashboard_url=dashboard_filename,
                 chat_title=chat_title,
+                source_jsonl_path=str(jsonl_path),
             )
 
         return base_name, None
@@ -1620,8 +1631,13 @@ def main():
     stats = {"new": [], "updated": [], "skipped": 0, "errors": {}}
     sessions_meta = build_sessions_index(source_path)
 
+    output_origin = (
+        " (from CODE_CHAT_VIEWER_DIR)"
+        if config.get("_output_source") == "env"
+        else ""
+    )
     print(f"  Source:  {source_path}")
-    print(f"  Output:  {output_path}")
+    print(f"  Output:  {output_path}{output_origin}")
     print(f"  Config:  {config['_resolved']['config_path']}")
     print()
 

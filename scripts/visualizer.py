@@ -793,8 +793,13 @@ CONVERSATION SUMMARY
 
     return message_html
 
-def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = ""):
-    """Generate the complete HTML document in terminal style."""
+def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = "", source_jsonl_path: str = ""):
+    """Generate the complete HTML document in terminal style.
+
+    source_jsonl_path: absolute path of the source JSONL — used by the
+    in-page "Delete" button to build the rm command. Falsy disables the
+    button (no source to remove alongside the HTML).
+    """
 
     # Count statistics (distinguishing tool_results)
     total_lines = len(messages)
@@ -859,7 +864,28 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     header_actions_parts.append(
         '<a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" class="header-btn feedback" title="Send feedback">Feedback</a>'
     )
+    # Delete button only appears when we know which JSONL backs this HTML,
+    # so the rm command can target both files. The HTML path is derived
+    # client-side from window.location, which stays correct even after
+    # manager.py moves the file into Chats/Shorts or Chats/Archived.
+    chat_jsonl_abs = str(Path(source_jsonl_path).resolve()) if source_jsonl_path else ""
+    if chat_jsonl_abs:
+        header_actions_parts.append(
+            '<button type="button" id="deleteBtn" class="header-btn delete" title="Delete this chat (shows rm command)">Delete</button>'
+        )
     header_actions_html = '\n                '.join(header_actions_parts)
+
+    # JSON-encoded values for safe embedding into the modal JS
+    chat_jsonl_json = json.dumps(chat_jsonl_abs)
+    chat_title_json = json.dumps(chat_title or Path(output_file).stem)
+
+    # Full session UUID (or whatever stem the source JSONL has), displayed
+    # in the header next to the chat title. Empty when source is unknown.
+    chat_uuid = Path(source_jsonl_path).stem if source_jsonl_path else ""
+    chat_uuid_html = (
+        f'<span class="chat-uuid" title="Session UUID — click to select, Ctrl+C to copy">{escape(chat_uuid)}</span>'
+        if chat_uuid else ""
+    )
 
     # Complete HTML template in terminal style
     html_template = f'''<!DOCTYPE html>
@@ -967,6 +993,19 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             color: #666;
         }}
 
+        .chat-uuid {{
+            color: #9CA3AF;
+            font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-weight: 400;
+            font-size: 11px;
+            padding: 1px 6px;
+            border: 1px solid #4a4a4a;
+            border-radius: 3px;
+            user-select: all;
+            cursor: text;
+            white-space: nowrap;
+        }}
+
         .terminal-controls {{
             display: flex;
             gap: 8px;
@@ -1015,6 +1054,116 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             background: #007ACC;
             border-color: #007ACC;
             color: #FFF;
+        }}
+
+        .header-btn.delete {{
+            border-color: #C0392B;
+            color: #F5B7B1;
+            background: transparent;
+            cursor: pointer;
+            font-family: inherit;
+        }}
+
+        .header-btn.delete:hover {{
+            background: #C0392B;
+            border-color: #C0392B;
+            color: #FFF;
+        }}
+
+        /* Delete-command modal */
+        .modal-overlay {{
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }}
+        .modal-overlay.open {{ display: flex; }}
+        .modal {{
+            background: #FFF;
+            border-radius: 6px;
+            padding: 22px 24px;
+            max-width: 760px;
+            width: 92%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+            font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            color: #1E1E1E;
+        }}
+        .modal h3 {{
+            margin: 0 0 12px;
+            font-size: 14px;
+            color: #C0392B;
+        }}
+        .modal-chat-name {{
+            color: #333;
+            font-size: 12px;
+            margin: 6px 0 14px;
+            padding: 6px 10px;
+            background: #F3F3F3;
+            border-radius: 3px;
+            word-break: break-all;
+        }}
+        .modal-note {{
+            font-size: 11px;
+            color: #555;
+            line-height: 1.5;
+            margin: 8px 0;
+        }}
+        .modal-warn {{
+            font-size: 11px;
+            color: #856404;
+            background: #FFF3CD;
+            border: 1px solid #FFE69C;
+            padding: 8px 10px;
+            border-radius: 3px;
+            margin: 10px 0;
+            line-height: 1.5;
+        }}
+        .modal pre {{
+            background: #1E1E1E;
+            color: #E8E8E8;
+            padding: 12px 14px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 11px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin: 10px 0;
+            user-select: all;
+        }}
+        .modal-actions {{
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }}
+        .modal-btn {{
+            padding: 6px 14px;
+            border: 1px solid #CCC;
+            border-radius: 3px;
+            background: #FFF;
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }}
+        .modal-btn:hover {{ background: #F0F0F0; }}
+        .modal-btn.primary {{
+            background: #007ACC;
+            color: #FFF;
+            border-color: #007ACC;
+        }}
+        .modal-btn.primary:hover {{
+            background: #005A9E;
+            border-color: #005A9E;
+        }}
+        .modal-btn.copied {{
+            background: #10893E;
+            color: #FFF;
+            border-color: #10893E;
         }}
 
         .stats-bar {{
@@ -1514,6 +1663,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
                 <span>Code Chat Viewer</span>
                 {'<span class="chat-name-sep">|</span><span class="chat-name">' + escape(chat_title) + '</span>' if chat_title else ''}
+                {chat_uuid_html}
             </div>
             <div class="header-actions">
                 {header_actions_html}
@@ -1566,6 +1716,20 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             <a href="https://nucleoia.es" target="_blank" style="color: #666; text-decoration: none;">nucleoia.es</a> |
             Processed {len(messages_html)} elements from {total_lines} total lines |
             <a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" style="color: #666; text-decoration: none;">Feedback</a>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="deleteModal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+        <div class="modal">
+            <h3 id="deleteModalTitle">Delete conversation</h3>
+            <div class="modal-chat-name" id="deleteChatName"></div>
+            <p class="modal-note">Copy and run this command in your terminal to permanently delete the chat HTML and the source JSONL:</p>
+            <pre id="deleteCommand"></pre>
+            <p class="modal-warn">This also removes the chat from Claude Code &mdash; the JSONL in <code>~/.claude/projects</code> is the source of truth.</p>
+            <div class="modal-actions">
+                <button class="modal-btn primary" id="copyCommandBtn" type="button">Copy command</button>
+                <button class="modal-btn" id="closeDeleteModalBtn" type="button">Close</button>
+            </div>
         </div>
     </div>
 
@@ -1751,6 +1915,85 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             const content = document.getElementById('terminalContent');
             content.scrollTop = 0;
         }});
+
+        // ====== DELETE-COMMAND MODAL ======
+        // CHAT_HTML_PATH is derived from window.location at click time so it
+        // stays correct even when manager.py moves the file into
+        // Chats/Shorts/ or Chats/Archived/ after generation. CHAT_JSONL_PATH
+        // is embedded because Claude Code never moves its source JSONLs.
+        const CHAT_JSONL_PATH = {chat_jsonl_json};
+        const CHAT_DISPLAY_NAME = {chat_title_json};
+
+        function getChatHtmlAbsPath() {{
+            let path = window.location.pathname || '';
+            try {{ path = decodeURIComponent(path); }} catch (e) {{ /* keep raw */ }}
+            // Windows file:/// URLs come through as "/C:/path/..." — strip the leading slash.
+            if (/^\\/[A-Za-z]:/.test(path)) path = path.slice(1);
+            return path;
+        }}
+
+        const deleteBtn = document.getElementById('deleteBtn');
+        const deleteModal = document.getElementById('deleteModal');
+        if (deleteBtn && deleteModal) {{
+            const deleteCommandEl = document.getElementById('deleteCommand');
+            const deleteChatNameEl = document.getElementById('deleteChatName');
+            const copyCommandBtn = document.getElementById('copyCommandBtn');
+            const closeBtn = document.getElementById('closeDeleteModalBtn');
+
+            const shellQuote = (s) => "'" + s.replace(/'/g, "'\\\\''") + "'";
+
+            const openDeleteModal = () => {{
+                const htmlPath = getChatHtmlAbsPath();
+                const parts = ['rm'];
+                if (htmlPath) parts.push(shellQuote(htmlPath));
+                if (CHAT_JSONL_PATH) parts.push(shellQuote(CHAT_JSONL_PATH));
+                deleteChatNameEl.textContent = CHAT_DISPLAY_NAME || '(unnamed)';
+                deleteCommandEl.textContent = parts.join(' ');
+                copyCommandBtn.textContent = 'Copy command';
+                copyCommandBtn.classList.remove('copied');
+                deleteModal.classList.add('open');
+            }};
+
+            const closeDeleteModal = () => deleteModal.classList.remove('open');
+
+            const copyDeleteCommand = () => {{
+                const cmd = deleteCommandEl.textContent;
+                const setCopied = () => {{
+                    copyCommandBtn.textContent = 'Copied!';
+                    copyCommandBtn.classList.add('copied');
+                }};
+                const fallbackCopy = () => {{
+                    const range = document.createRange();
+                    range.selectNodeContents(deleteCommandEl);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    try {{
+                        document.execCommand('copy');
+                        setCopied();
+                    }} catch (e) {{
+                        copyCommandBtn.textContent = 'Select & copy manually';
+                    }}
+                }};
+                if (navigator.clipboard && navigator.clipboard.writeText) {{
+                    navigator.clipboard.writeText(cmd).then(setCopied).catch(fallbackCopy);
+                }} else {{
+                    fallbackCopy();
+                }}
+            }};
+
+            deleteBtn.addEventListener('click', openDeleteModal);
+            copyCommandBtn.addEventListener('click', copyDeleteCommand);
+            closeBtn.addEventListener('click', closeDeleteModal);
+            deleteModal.addEventListener('click', (e) => {{
+                if (e.target === deleteModal) closeDeleteModal();
+            }});
+            document.addEventListener('keydown', (e) => {{
+                if (e.key === 'Escape' && deleteModal.classList.contains('open')) {{
+                    closeDeleteModal();
+                }}
+            }});
+        }}
     </script>
 </body>
 </html>'''
@@ -1831,7 +2074,7 @@ def main():
         print(f"Generated filename: {output_file}")
 
     print(f"Generating HTML in terminal style...")
-    generate_html(messages, output_file)
+    generate_html(messages, output_file, source_jsonl_path=input_file)
 
     print(f"\nConversion completed!")
     print(f"Open file: {output_file}")

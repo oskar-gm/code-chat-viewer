@@ -150,6 +150,12 @@ Each project subdirectory contains:
 | `archive.enabled` | bool | `true` | Separate old inactive chats |
 | `archive.folder` | string | `Archived` | Subfolder name for archived chats |
 
+### Environment variables
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | `output.folder` | Output root (dashboard + `Chats/`). Tilde (`~`) is expanded. Takes precedence over `config.json` when set. |
+
 ## Dashboard Features
 
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
@@ -170,6 +176,8 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 Each generated chat HTML includes:
 
 - **Chat title in header**: Displays the chat name next to "Code Chat Viewer" (resolved from custom title, session index, or first prompt)
+- **Full session UUID in header**: Shown next to the title as a small monospaced badge. `user-select: all` so one click selects the whole UUID for copy.
+- **Delete button in header**: Opens a modal with the exact `rm` command (POSIX) for the chat HTML and the source JSONL in `~/.claude/projects`, with a one-click copy. The user runs the command themselves — neither manager.py nor visualizer.py ever delete files on their own.
 - **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
 - **Conversation filter**: Filter messages by text content
 - **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, position counter, and keyboard shortcuts (N/P)

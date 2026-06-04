@@ -98,6 +98,18 @@ Configurable options:
 | Archive | Enabled | Separate old inactive chats into subfolder |
 | Inactive days | 5 | Days without activity before organizing |
 
+#### Environment variable override
+
+If the `CODE_CHAT_VIEWER_DIR` environment variable is set, it overrides
+`output.folder` from `config.json`. Useful for centralizing the output location
+across machines without editing the tracked config file. Tilde (`~`) is
+expanded automatically.
+
+```bash
+# In ~/.zshrc or ~/.bashrc
+export CODE_CHAT_VIEWER_DIR="~/.CodeChatViewer"
+```
+
 ### Features
 
 - Terminal-style aesthetics inspired by VS Code
@@ -112,6 +124,8 @@ Configurable options:
 - Dashboard state persistence (sort, filters, search, columns) via localStorage
 - Security-safe HTML rendering (escaped tool parameters)
 - Interactive dashboard with sortable table, search, exclude filter, and category filters
+- In-chat Delete button: opens a modal with the exact `rm` command (POSIX, Linux/macOS) for the chat HTML + source JSONL, with a one-click copy
+- Full session UUID shown in the chat header (click to select, Ctrl+C to copy)
 - Batch generation with incremental updates (only regenerates changed chats)
 - Accurate timestamps and message counts read directly from JSONL files
 - Automatic filtering of snapshot-only entries (Claude Code's undo system)
@@ -393,6 +407,18 @@ Opciones configurables:
 | Archivo | Activado | Separar chats inactivos antiguos en subcarpeta |
 | Días de inactividad | 5 | Días sin actividad antes de organizar |
 
+#### Variable de entorno (override)
+
+Si la variable de entorno `CODE_CHAT_VIEWER_DIR` está definida, sobreescribe
+`output.folder` de `config.json`. Útil para centralizar la ubicación entre
+máquinas sin editar el archivo de configuración versionado. La tilde (`~`)
+se expande automáticamente.
+
+```bash
+# En ~/.zshrc o ~/.bashrc
+export CODE_CHAT_VIEWER_DIR="~/.CodeChatViewer"
+```
+
 ### Características
 
 - Estética estilo terminal inspirada en VS Code
@@ -407,6 +433,8 @@ Opciones configurables:
 - Persistencia de estado del dashboard (orden, filtros, búsqueda, columnas) vía localStorage
 - Renderizado HTML seguro (parámetros de herramientas escapados)
 - Panel interactivo con tabla ordenable, búsqueda, filtro de exclusión y filtros por categoría
+- Botón Delete en la propia página del chat: abre un modal con el comando `rm` exacto (POSIX, Linux/macOS) para el HTML y el JSONL fuente, con copiado en un clic
+- UUID completo de la sesión mostrado en la cabecera del chat (clic para seleccionar, Ctrl+C para copiar)
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
 - Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
 - Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)
