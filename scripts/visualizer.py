@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Code Chat Viewer v2.2.0
+Code Chat Viewer v2.3.0
 
 Converts Claude Code chat JSON files (JSONL format) into formatted HTML
 visualizations with terminal-style aesthetics, syntax highlighting, and
@@ -10,7 +10,7 @@ Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
 
 Author: Óscar González Martín
-Version: 2.2.0
+Version: 2.3.0
 Contact: oscar@nucleoia.es
 Website: https://nucleoia.es
 Repository: https://github.com/oskar-gm/code-chat-viewer
@@ -95,11 +95,27 @@ def parse_chat_json(json_file: str) -> List[Dict]:
                     continue
     return messages
 
+# Application version — single source of truth (used in headers and meta tags).
+APP_VERSION = "2.3.0"
+
+# Time display format for timestamps: "12h" (AM/PM) or "24h".
+# Set by generate_html() from config; "12h" is the default.
+TIME_FORMAT = "12h"
+
+
+def _time_pattern() -> str:
+    """strftime pattern for the time portion, per TIME_FORMAT."""
+    return '%H:%M' if TIME_FORMAT == "24h" else '%I:%M %p'
+
+
 def format_timestamp(timestamp_str: str) -> str:
-    """Format ISO timestamp to HH:MM AM/PM in local timezone."""
+    """Format ISO timestamp to `YYYY-MM-DD <time>` in local timezone.
+
+    The time portion follows TIME_FORMAT: 12h (AM/PM, default) or 24h.
+    """
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).astimezone()
-        return dt.strftime('%I:%M %p').lstrip('0')
+        return dt.strftime(f'%Y-%m-%d {_time_pattern()}')
     except (ValueError, TypeError):
         return ""
 
@@ -270,6 +286,23 @@ def parse_ask_result(text: str) -> list:
 
     return results
 
+
+def parse_user_rejection(text: str) -> dict | None:
+    """Detect and parse a tool_use rejection with optional user feedback.
+
+    Returns dict with 'feedback' (user message or empty) and 'has_feedback' flag,
+    or None if not a rejection pattern.
+    """
+    if "doesn't want to proceed" not in text:
+        return None
+    feedback = ''
+    if 'the user said:\n' in text:
+        feedback = text.split('the user said:\n', 1)[1].strip()
+    elif 'the user said:' in text:
+        feedback = text.split('the user said:', 1)[1].strip()
+    return {'feedback': feedback, 'has_feedback': bool(feedback)}
+
+
 def _get_tool_result_text(item: dict) -> str:
     """Extract text from a tool_result item."""
     content = item.get('content', '')
@@ -361,7 +394,7 @@ def render_ask_result_block(qa_pairs: list, tool_use_id: str, uuid: str) -> str:
     content = ''.join(items_html)
     separator = '─' * 80
 
-    return f'''<div class="message ask-result-msg nav-always">
+    return f'''<div class="message user-msg ask-result-msg nav-always">
 <div class="ask-inner">
 <div class="msg-header">
 <span class="bullet" style="color:#D97706; font-size:14px;">&#10067;</span> <span class="label" style="color:#D97706;">[USER RESPONSE]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:]) if tool_use_id else 'N/A'}</span>
@@ -374,6 +407,39 @@ def render_ask_result_block(qa_pairs: list, tool_use_id: str, uuid: str) -> str:
 <div class="separator">{separator}</div>
 </div>
 '''
+
+
+def render_user_rejection_block(rejection: dict, tool_use_id: str, uuid: str) -> str:
+    """Render a tool_use rejection with optional user feedback.
+
+    Shows a coral/red indicator for the rejection, and if the user provided
+    feedback, displays it prominently as a user message.
+    """
+    separator = '─' * 80
+    feedback = rejection.get('feedback', '')
+
+    if feedback:
+        feedback_html = escape_html_preserve_structure(feedback)
+        return f'''<div class="message user-msg reject-msg nav-always">
+<div class="ask-inner" style="background:#FFF1F2; border-left:3px solid #F87171;">
+<div class="msg-header">
+<span class="bullet" style="color:#DC2626; font-size:14px;">&#10060;</span> <span class="label" style="color:#DC2626;">[REJECTED]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:]) if tool_use_id else 'N/A'}</span>
+</div>
+<div style="padding:6px 12px; color:#1E1E1E; white-space:normal; margin-left:15px;">
+<div style="font-weight:700; color:#991B1B; margin-bottom:4px;">User feedback:</div>
+<div style="color:#1E1E1E;">{feedback_html}</div>
+</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+    else:
+        return f'''<div class="message user-msg nav-skip"><div class="msg-content" style="color:#DC2626; background:#FFF1F2; border-left:3px solid #F87171; padding:6px 12px; margin-left:15px; font-size:12px; border-radius:4px;"><span style="font-weight:700;">&#10060;</span> <span style="font-weight:600;">[REJECTED]</span> Tool use rejected by user</div><div class="separator">{separator}</div></div>
+'''
+
 
 def render_compact_block(compact_data: dict) -> str:
     """Render a grouped compact block (collapsible, purple styling).
@@ -559,6 +625,169 @@ def render_ask_tool_use(tool_id: str, tool_input: dict) -> str:
 </div></details>'''
 
 
+# ====== /btw history injection ======
+#
+# Claude Code's `/btw` command (when used inline, without explicit fork) does
+# NOT persist to disk in recent versions (>= ~v2.1.97). The only durable
+# record is the user-typed prompt in `~/.claude/history.jsonl`. We pull those
+# prompts back into the main chat flow as pseudo-messages so users can at
+# least see WHEN and WHAT they asked, even if Claude's response wasn't kept.
+
+
+def merge_btw_history_into_messages(messages: list, btw_entries: list) -> list:
+    """Insert /btw pseudo-entries from history.jsonl into the message list at
+    their timestamp position. Each pseudo-entry carries `_btw_inline_history`."""
+    if not btw_entries:
+        return messages
+
+    pseudos = []
+    for e in btw_entries:
+        ts_ms = e.get('timestamp', 0) or 0
+        try:
+            ts_iso = datetime.fromtimestamp(ts_ms / 1000).astimezone().isoformat()
+        except (ValueError, OSError, OverflowError):
+            ts_iso = ''
+        pseudos.append({
+            '_btw_inline_history': True,
+            'query': e.get('query', '') or e.get('display', '').replace('/btw', '', 1).strip(),
+            'timestamp': ts_iso,
+            'timestamp_ms': ts_ms,
+        })
+
+    pseudos.sort(key=lambda p: p['timestamp_ms'])
+
+    def msg_ts(m):
+        return m.get('timestamp', '') if isinstance(m, dict) else ''
+
+    result = list(messages)
+    for pseudo in reversed(pseudos):
+        pseudo_ts = pseudo['timestamp']
+        insert_at = 0
+        for i, m in enumerate(result):
+            if msg_ts(m) and msg_ts(m) <= pseudo_ts:
+                insert_at = i + 1
+        result.insert(insert_at, pseudo)
+    return result
+
+
+def render_btw_history_message(btw_data: dict) -> str:
+    """Render a /btw pseudo-entry as a user-style message with Claude-cream
+    styling and an English disclaimer next to the [USER] label."""
+    query = btw_data.get('query', '') or ''
+    timestamp_iso = btw_data.get('timestamp', '') or ''
+    time_str = format_timestamp(timestamp_iso) if timestamp_iso else ''
+    separator = '─' * 80
+
+    return f'''<div class="message user-msg btw-history-msg">
+<div class="msg-header">
+<span class="bullet">•</span> <span class="label">[USER]:</span> <span class="btw-history-note">/btw — Claude doesn't persist the answer</span> <span class="metadata">{escape(time_str)}</span>
+</div>
+<div class="msg-content btw-history-content">/btw {escape(query)}</div>
+<div class="msg-footer">
+<span class="uuid-small">from history.jsonl</span>
+</div>
+<div class="separator">{separator}</div>
+</div>
+'''
+
+
+def render_write_tool_use(tool_id: str, tool_input: dict) -> str:
+    """Render a Write tool_use as a full-width content block. Visually echoes the
+    `new_string` side of an Edit diff (it IS new content being written) but with
+    a distinct blue accent so it's easy to differentiate from Edits at a glance.
+    Shares the collapsible `<details class="tool-use ...">` structure so the
+    global Edit/Write toggle button operates on both."""
+    file_path = tool_input.get('file_path', '')
+    content = tool_input.get('content', '') or ''
+
+    file_hint = f' <span class="tool-use-hint">&mdash; {escape(file_path)}</span>' if file_path else ''
+    summary = f'Tool: Write{file_hint}'
+
+    meta_lines = [f'   ID: {escape(tool_id[:16])}...']
+    if file_path:
+        meta_lines.append(f'   file_path: {escape(file_path)}')
+    metadata = '<br>'.join(meta_lines)
+
+    return (
+        f'<details class="tool-use tool-use-write" data-tool-name="Write">'
+        f'<summary>{summary}</summary>'
+        f'<div class="tool-use-content" style="white-space:normal;">'
+        f'{metadata}'
+        f'<div class="edit-diff-container">'
+        f'<div class="write-block">'
+        f'<div class="write-block-head">content:</div>'
+        f'<pre class="write-block-body">{escape(content)}</pre>'
+        f'</div>'
+        f'</div>'
+        f'</div></details>'
+    )
+
+
+def render_edit_tool_use(tool_id: str, tool_name: str, tool_input: dict) -> str:
+    """Render Edit / MultiEdit tool_use with a two-column diff view (old vs new)."""
+    file_path = tool_input.get('file_path', '')
+
+    if tool_name == 'MultiEdit':
+        edits = tool_input.get('edits', []) or []
+    else:  # Edit (or Write fallback uses main path)
+        edits = [{
+            'old_string': tool_input.get('old_string', ''),
+            'new_string': tool_input.get('new_string', ''),
+            'replace_all': tool_input.get('replace_all', False),
+        }]
+
+    if not edits:
+        return None
+
+    file_hint = f' <span class="tool-use-hint">&mdash; {escape(file_path)}</span>' if file_path else ''
+    summary = f'Tool: {escape(tool_name)}{file_hint}'
+
+    meta_lines = [f'   ID: {escape(tool_id[:16])}...']
+    if file_path:
+        meta_lines.append(f'   file_path: {escape(file_path)}')
+    metadata = '<br>'.join(meta_lines)
+
+    total = len(edits)
+    diff_blocks = []
+    for idx, edit in enumerate(edits):
+        old_s = edit.get('old_string', '') or ''
+        new_s = edit.get('new_string', '') or ''
+        replace_all = bool(edit.get('replace_all', False))
+
+        label_html = ''
+        if total > 1:
+            label_html = f'<div class="edit-diff-label">&#9472;&#9472; Edit {idx + 1}/{total} &#9472;&#9472;</div>'
+
+        badge_html = ''
+        if replace_all:
+            badge_html = ' <span class="edit-replace-all">replace_all</span>'
+
+        diff_blocks.append(
+            f'{label_html}'
+            f'<div class="edit-diff">'
+            f'<div class="edit-diff-col edit-diff-old">'
+            f'<div class="edit-diff-head">old_string:{badge_html}</div>'
+            f'<pre class="edit-diff-body">{escape(old_s)}</pre>'
+            f'</div>'
+            f'<div class="edit-diff-col edit-diff-new">'
+            f'<div class="edit-diff-head">new_string:</div>'
+            f'<pre class="edit-diff-body">{escape(new_s)}</pre>'
+            f'</div>'
+            f'</div>'
+        )
+
+    diff_html = ''.join(diff_blocks)
+
+    return (
+        f'<details class="tool-use tool-use-edit" data-tool-name="{escape(tool_name)}">'
+        f'<summary>{summary}</summary>'
+        f'<div class="tool-use-content" style="white-space:normal;">'
+        f'{metadata}'
+        f'<div class="edit-diff-container">{diff_html}</div>'
+        f'</div></details>'
+    )
+
+
 def format_content_item(item) -> str:
     """Format an individual content item."""
     if isinstance(item, str):
@@ -591,6 +820,18 @@ def format_content_item(item) -> str:
             ask_html = render_ask_tool_use(tool_id, tool_input)
             if ask_html:
                 return ask_html
+
+        # Special rendering for Edit / MultiEdit with diff view
+        if tool_name in ('Edit', 'MultiEdit'):
+            edit_html = render_edit_tool_use(tool_id, tool_name, tool_input)
+            if edit_html:
+                return edit_html
+
+        # Special rendering for Write — full-width block, blue accent
+        if tool_name == 'Write':
+            write_html = render_write_tool_use(tool_id, tool_input)
+            if write_html:
+                return write_html
 
         input_lines = []
         for key, value in tool_input.items():
@@ -693,10 +934,17 @@ CONVERSATION SUMMARY
     # ====== DETECT TOOL_RESULT (NOT A REAL USER MESSAGE) ======
     if role == 'user' and is_tool_result_message(content):
         tool_results_html = []
+        # Collect inline user comments (text items alongside tool_results)
+        user_comments = []
         for item in content:
-            if isinstance(item, dict) and item.get('type') == 'tool_result':
-                # Check if this is an AskUserQuestion result
+            if isinstance(item, dict) and item.get('type') == 'text':
+                comment = item.get('text', '').strip()
+                if comment:
+                    user_comments.append(comment)
+            elif isinstance(item, dict) and item.get('type') == 'tool_result':
                 result_text = _get_tool_result_text(item)
+
+                # Check if this is an AskUserQuestion result
                 if result_text.startswith('User has answered your questions:'):
                     qa_pairs = parse_ask_result(result_text)
                     if qa_pairs:
@@ -704,18 +952,42 @@ CONVERSATION SUMMARY
                             qa_pairs, item.get('tool_use_id', ''), uuid))
                         continue
 
+                # Check if this is a user rejection (with optional feedback)
+                rejection = parse_user_rejection(result_text)
+                if rejection:
+                    tool_results_html.append(render_user_rejection_block(
+                        rejection, item.get('tool_use_id', ''), uuid))
+                    continue
+
                 result_content = format_tool_result_content(item)
                 tool_use_id = item.get('tool_use_id', 'N/A')
 
                 tool_results_html.append(f'''<div class="tool-result-msg">
 <div class="msg-header">
-<span class="bullet">&#128228;</span> <span class="label">[TOOL RESULT]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:])}</span>
+<span class="tool-result-toggle">&#9654;</span><span class="bullet">&#128228;</span> <span class="label">[TOOL RESULT]</span> <span class="metadata">Tool ID: {escape(tool_use_id[-12:])}</span>
 </div>
 <div class="msg-content">{result_content}</div>
 <div class="msg-footer">
 <span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
 </div>
 <div class="separator">{'─' * 80}</div>
+</div>''')
+
+        # Render inline user comments as a visible user feedback block
+        if user_comments:
+            comment_text = escape_html_preserve_structure('<br>'.join(user_comments))
+            separator = '─' * 80
+            tool_results_html.append(f'''<div class="message user-msg ask-result-msg nav-always">
+<div class="ask-inner">
+<div class="msg-header">
+<span class="bullet" style="color:#D97706; font-size:14px;">&#128172;</span> <span class="label" style="color:#D97706;">[USER COMMENT]</span>
+</div>
+<div style="padding:4px 12px; color:#1E1E1E; white-space:normal; margin-left:15px;">{comment_text}</div>
+</div>
+<div class="msg-footer">
+<span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
+</div>
+<div class="separator">{separator}</div>
 </div>''')
 
         return '\n'.join(tool_results_html)
@@ -793,8 +1065,19 @@ CONVERSATION SUMMARY
 
     return message_html
 
-def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = ""):
-    """Generate the complete HTML document in terminal style."""
+def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = "", chat_uuid: str = "", history_entries=None, time_format: str = "12h"):
+    """Generate the complete HTML document in terminal style.
+
+    `history_entries`, when provided, is a list of /btw entries from
+    ~/.claude/history.jsonl. The ones matching `chat_uuid` are merged into the
+    flow as pseudo-messages styled in Claude cream so users can see /btw
+    queries that Claude Code doesn't persist as full Q+A any more.
+
+    `time_format` controls the time portion of timestamps: "12h" (AM/PM,
+    default) or "24h".
+    """
+    global TIME_FORMAT
+    TIME_FORMAT = time_format if time_format in ("12h", "24h") else "12h"
 
     # Count statistics (distinguishing tool_results)
     total_lines = len(messages)
@@ -820,8 +1103,17 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
         elif m.get('message', {}).get('role') == 'assistant':
             assistant_msgs += 1
 
-    # Pre-process: group compact-related messages
+    # Pre-process: group compact-related messages, then inject /btw entries
+    # from history.jsonl (those matching this session) at their timestamps.
     processed_messages = group_compact_messages(messages)
+
+    btw_for_session = []
+    if history_entries and chat_uuid:
+        btw_for_session = [e for e in history_entries if e.get('sessionId') == chat_uuid]
+    if btw_for_session:
+        processed_messages = merge_btw_history_into_messages(processed_messages, btw_for_session)
+
+    btw_count = sum(1 for m in processed_messages if isinstance(m, dict) and m.get('_btw_inline_history'))
 
     # Generate HTML for all messages
     messages_html = []
@@ -829,6 +1121,8 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
         # Compact groups are rendered directly
         if isinstance(msg, dict) and msg.get('_compact_group'):
             msg_html = render_compact_block(msg)
+        elif isinstance(msg, dict) and msg.get('_btw_inline_history'):
+            msg_html = render_btw_history_message(msg)
         else:
             msg_html = format_message_html(msg, i)
         if msg_html:
@@ -842,7 +1136,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
         try:
             dt = datetime.fromisoformat(chat_timestamp.replace('Z', '+00:00')).astimezone()
             chat_date = dt.strftime('%d/%m/%Y')
-            chat_time = dt.strftime('%H:%M')
+            chat_time = dt.strftime(_time_pattern())
         except (ValueError, TypeError):
             chat_date = "N/A"
             chat_time = "N/A"
@@ -857,7 +1151,10 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
             f'<a href="{escape(dashboard_url)}" class="header-btn" title="Back to Dashboard">&#9664; Dashboard</a>'
         )
     header_actions_parts.append(
-        '<a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" class="header-btn feedback" title="Send feedback">Feedback</a>'
+        '<a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener" class="header-btn feedback" title="Report an issue or send feedback on GitHub">Feedback</a>'
+    )
+    header_actions_parts.append(
+        '<a href="https://github.com/oskar-gm/code-chat-viewer/releases/latest" target="_blank" rel="noopener" class="header-btn release" title="Latest release — check for updates">Latest release</a>'
     )
     header_actions_html = '\n                '.join(header_actions_parts)
 
@@ -865,7 +1162,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
     html_template = f'''<!DOCTYPE html>
 <!--
 =============================================================================
-Code Chat Viewer v2.2.0 - Professional Chat Log HTML Exporter
+Code Chat Viewer v{APP_VERSION} - Professional Chat Log HTML Exporter
 Generated HTML Visualization
 =============================================================================
 
@@ -893,7 +1190,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, VS Code, and AI coding assistants.">
     <meta name="keywords" content="Claude Code, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, code assistant history, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard, coding assistant logs">
 
-    <meta name="generator" content="Code Chat Viewer v2.2.0 - https://github.com/oskar-gm/code-chat-viewer">
+    <meta name="generator" content="Code Chat Viewer v{APP_VERSION} - https://github.com/oskar-gm/code-chat-viewer">
     <meta name="robots" content="index, follow">
     <meta name="language" content="English, Spanish">
 
@@ -925,19 +1222,29 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             box-sizing: border-box;
         }}
 
+        html, body {{
+            height: 100%;
+        }}
+
         body {{
             font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
             background: #FFFFFF;
             color: #1E1E1E;
-            line-height: 1.6;
-            font-size: 14px;
+            line-height: 1.4;
+            font-size: 13px;
             padding: 0;
             margin: 0;
+            display: flex;
+            flex-direction: column;
         }}
 
         .container {{
             width: 100%;
             background: #FFFFFF;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }}
 
         .terminal-header {{
@@ -1014,6 +1321,17 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .header-btn.feedback:hover {{
             background: #007ACC;
             border-color: #007ACC;
+            color: #FFF;
+        }}
+
+        .header-btn.release {{
+            border-color: #10893E;
+            color: #6BCB8B;
+        }}
+
+        .header-btn.release:hover {{
+            background: #10893E;
+            border-color: #10893E;
             color: #FFF;
         }}
 
@@ -1154,29 +1472,40 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         .terminal-content {{
-            padding: 10px 15px;
-            max-height: calc(100vh - 200px);
+            padding: 6px 12px;
+            flex: 1;
+            min-height: 0;
             overflow-y: auto;
             background: #FFFFFF;
         }}
 
         .message {{
-            margin-bottom: 8px;
+            margin-bottom: 4px;
             font-size: 13px;
-            line-height: 1.5;
+            line-height: 1.4;
+        }}
+
+        /* User/Assistant/Command/Stdout/Reject/Task: their `.msg-header` is a
+           direct child of `.message` (no inner box). Indent it by 11px so the
+           bullet aligns with the chevron of boxed wrappers (border 3 + pad 8).
+           Compact / Ask have their header inside `.compact-inner` / `.ask-inner`
+           and naturally inherit that 11px inset, so this selector skips them.
+           Tool-result has no `.message` wrapper at all. */
+        .message > .msg-header {{
+            padding-left: 11px;
         }}
 
         .msg-header {{
             display: flex;
             align-items: baseline;
-            margin-bottom: 4px;
-            gap: 8px;
+            margin-bottom: 2px;
+            gap: 6px;
         }}
 
         .bullet {{
             font-weight: bold;
-            font-size: 16px;
-            margin-right: 4px;
+            font-size: 13px;
+            margin-right: 3px;
         }}
 
         /* Higher specificity to prevent CSS cascade conflicts */
@@ -1191,18 +1520,18 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .label {{
             font-weight: 700;
             color: #1E1E1E;
-            font-size: 15px;
+            font-size: 12px;
         }}
 
         .user-msg .label,
         .assistant-msg .label {{
-            font-size: 15px;
-            letter-spacing: 0.5px;
+            font-size: 12px;
+            letter-spacing: 0.3px;
         }}
 
         .metadata {{
-            color: #666;
-            font-size: 12px;
+            color: #999;
+            font-size: 11px;
             margin-left: auto;
         }}
 
@@ -1219,86 +1548,85 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         /* Higher specificity to prevent CSS cascade conflicts */
         .message.user-msg .msg-content {{
-            padding: 6px 12px;
+            padding: 4px 10px;
             color: #0066CC;
             background: #F8FBFF;
             border-left: 3px solid #0066CC;
-            border-radius: 4px;
-            margin-left: 15px;
-            font-size: 14px;
-            line-height: 1.5;
+            border-radius: 3px;
+            margin-left: 12px;
+            font-size: 13px;
+            line-height: 1.4;
         }}
 
         .assistant-msg .msg-content {{
-            padding: 6px 12px;
+            padding: 4px 10px;
             color: #1E1E1E;
             background: #FAFFF8;
             border-left: 3px solid #10893E;
-            border-radius: 4px;
-            margin-left: 15px;
-            font-size: 14px;
-            line-height: 1.5;
+            border-radius: 3px;
+            margin-left: 12px;
+            font-size: 13px;
+            line-height: 1.4;
         }}
 
+        /* Tool-result: no envelope box on the wrapper itself. The header sits
+           at the same X as the user/assistant headers (padding-left: 11px).
+           The collapsible content gets its own gray box + orange border with
+           margin-left to align with .msg-content of user/assistant. */
         .tool-result-msg {{
-            margin-bottom: 8px;
-            background: #F8F8F8;
-            border-left: 3px solid #FF6B00;
-            padding: 8px 10px;
-            border-radius: 4px;
+            margin-bottom: 4px;
         }}
 
-        .tool-result-header {{
+        .tool-result-msg > .msg-header {{
+            padding-left: 11px;
             cursor: pointer;
             user-select: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-weight: 600;
-            color: #FF6B00;
         }}
 
-        .tool-result-header:hover {{
-            opacity: 0.8;
+        .tool-result-msg > .msg-header:hover {{
+            opacity: 0.85;
         }}
 
-        .tool-result-toggle {{
-            font-size: 12px;
-            transition: transform 0.2s;
-        }}
-
-        .tool-result-toggle.collapsed {{
-            transform: rotate(-90deg);
-        }}
-
-        .tool-result-content {{
-            margin-top: 6px;
+        .tool-result-msg > .msg-content {{
             display: none;
+            background: #F8F8F8;
+            border-left: 3px solid #FF6B00;
+            padding: 4px 8px;
+            margin: 4px 0 0 11px;
+            border-radius: 3px;
+            color: #333;
+            font-size: 12px;
         }}
 
-        .tool-result-content.expanded {{
+        .tool-result-msg > .msg-content.expanded {{
             display: block;
         }}
 
-        .tool-result-msg .msg-content {{
-            padding-left: 10px;
-            color: #333;
-            font-size: 12px;
+        .tool-result-toggle {{
+            display: inline-block;
+            font-size: 10px;
+            color: #FF6B00;
+            margin-right: 4px;
+            transition: transform 0.15s;
+        }}
+
+        .tool-result-toggle.expanded {{
+            transform: rotate(90deg);
         }}
 
         .thinking {{
             background: #FFFFFF;
             border-left: 3px solid #B8C8B8;
-            margin: 5px 0;
+            margin: 3px 0;
             font-style: italic;
             color: #666;
-            border-radius: 4px;
+            border-radius: 3px;
             box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-            font-size: 13px;
-            line-height: 1.5;
+            font-size: 12px;
+            line-height: 1.4;
         }}
         .thinking summary {{
-            padding: 6px 10px;
+            padding: 4px 8px;
             cursor: pointer;
             user-select: none;
             white-space: nowrap;
@@ -1309,79 +1637,385 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             display: none;
         }}
         .thinking-content {{
-            padding: 0 10px 8px;
+            padding: 0 8px 5px;
             border-top: 1px solid #E0E8E0;
         }}
 
         .tool-use {{
             background: #48484A;
             border-left: 3px solid #6A6A6C;
-            margin: 5px 0;
+            margin: 3px 0;
             color: #E8E8E8;
-            border-radius: 4px;
+            border-radius: 3px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-            font-size: 13px;
-            line-height: 1.5;
+            font-size: 12px;
+            line-height: 1.4;
         }}
         .tool-use summary {{
-            padding: 6px 10px;
+            padding: 4px 8px;
             cursor: pointer;
             user-select: none;
         }}
         .tool-use-content {{
-            padding: 0 10px 8px;
+            padding: 0 8px 5px;
             border-top: 1px solid #5A5A5C;
             word-wrap: break-word;
             overflow-wrap: break-word;
         }}
 
-        .msg-footer {{
-            padding-left: 15px;
-            margin-top: 3px;
-            font-size: 11px;
-            color: #999;
+        .tool-use-hint {{
+            color: #9A9A9C;
+            font-weight: 400;
+            font-size: 12px;
+        }}
+
+        /* ====== Edit / MultiEdit diff view ====== */
+        .edit-diff-container {{
+            margin-top: 8px;
+        }}
+
+        .edit-diff {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin: 6px 0;
+        }}
+
+        .edit-diff-col {{
+            background: #3A3A3C;
+            border-radius: 4px;
+            overflow: hidden;
             display: flex;
-            gap: 20px;
+            flex-direction: column;
+            min-width: 0;
+        }}
+
+        .edit-diff-old {{
+            border-left: 3px solid #D16969;
+        }}
+
+        .edit-diff-new {{
+            border-left: 3px solid #6AB06F;
+        }}
+
+        .edit-diff-head {{
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(0,0,0,0.22);
+            border-bottom: 1px solid rgba(0,0,0,0.3);
+            font-family: 'Consolas', 'Courier New', monospace;
+        }}
+
+        .edit-diff-old .edit-diff-head {{
+            color: #FFB3B3;
+        }}
+
+        .edit-diff-new .edit-diff-head {{
+            color: #B3F0BD;
+        }}
+
+        .edit-diff-body {{
+            padding: 8px;
+            margin: 0;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+            max-height: 420px;
+            overflow-y: auto;
+        }}
+
+        .edit-diff-old .edit-diff-body {{
+            color: #FFB3B3;
+        }}
+
+        .edit-diff-new .edit-diff-body {{
+            color: #B3F0BD;
+        }}
+
+        .edit-diff-label {{
+            font-size: 11px;
+            color: #BBB;
+            margin: 10px 0 4px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            letter-spacing: 0.5px;
+        }}
+
+        .edit-replace-all {{
+            background: #5A5A5C;
+            color: #FFD699;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 500;
+            margin-left: 4px;
+            letter-spacing: 0.3px;
+        }}
+
+        /* Light theme (toggle A) */
+        body.edit-diff-light .edit-diff-old {{
+            background: #FFE4E4;
+            border-left-color: #C42B1C;
+        }}
+        body.edit-diff-light .edit-diff-new {{
+            background: #DFF7E0;
+            border-left-color: #107C10;
+        }}
+        body.edit-diff-light .edit-diff-old .edit-diff-head {{
+            background: rgba(196,43,28,0.14);
+            color: #8B0000;
+            border-bottom-color: rgba(196,43,28,0.22);
+        }}
+        body.edit-diff-light .edit-diff-new .edit-diff-head {{
+            background: rgba(16,124,16,0.14);
+            color: #0A5F0A;
+            border-bottom-color: rgba(16,124,16,0.22);
+        }}
+        body.edit-diff-light .edit-diff-old .edit-diff-body {{
+            color: #8B0000;
+        }}
+        body.edit-diff-light .edit-diff-new .edit-diff-body {{
+            color: #0A5F0A;
+        }}
+
+        /* ====== Write tool: full-width block, blue accent ====== */
+        .write-block {{
+            background: #3A3A3C;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            border-left: 3px solid #4A90E2;
+            margin: 6px 0;
+        }}
+        .write-block-head {{
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(0,0,0,0.22);
+            border-bottom: 1px solid rgba(0,0,0,0.3);
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: #A8C8FF;
+        }}
+        .write-block-body {{
+            padding: 8px;
+            margin: 0;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+            max-height: 420px;
+            overflow-y: auto;
+            color: #A8C8FF;
+        }}
+        body.edit-diff-light .write-block {{
+            background: #E4EEFB;
+            border-left-color: #1E5BAA;
+        }}
+        body.edit-diff-light .write-block-head {{
+            background: rgba(30,91,170,0.14);
+            color: #0B3F86;
+            border-bottom-color: rgba(30,91,170,0.22);
+        }}
+        body.edit-diff-light .write-block-body {{
+            color: #0B3F86;
+        }}
+
+        /* ====== /btw injected from history.jsonl ====== */
+        .btw-history-msg .msg-content,
+        .btw-history-content {{
+            background: #F4F0E8 !important;
+            color: #1E1E1E !important;
+            border-left: 3px solid #C76A4D !important;
+        }}
+        .btw-history-msg .label {{
+            color: #9A4A2E !important;
+        }}
+        .btw-history-msg .bullet {{
+            color: #C76A4D !important;
+        }}
+        .btw-history-note {{
+            color: #9A4A2E;
+            font-size: 10px;
+            font-style: italic;
+            margin-left: 6px;
+            opacity: 0.85;
+        }}
+
+        @media (max-width: 900px) {{
+            .edit-diff {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+
+        /* ====== Edit controls in search bar ====== */
+        .edit-ctrl-group {{
+            display: inline-flex;
+            gap: 2px;
+            align-items: center;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn {{
+            border-radius: 0;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn:first-child {{
+            border-top-left-radius: 3px;
+            border-bottom-left-radius: 3px;
+        }}
+
+        .edit-ctrl-group .edit-ctrl-btn:last-child {{
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }}
+
+        .edit-ctrl-btn-theme {{
+            border-left-width: 0 !important;
+        }}
+
+        .edit-ctrl-btn {{
+            background: #F0F0F0;
+            border: 1px solid #CCCCCC;
+            border-radius: 3px;
+            height: 28px;
+            padding: 0 10px;
+            cursor: pointer;
+            font-size: 11px;
+            color: #333;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-family: inherit;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }}
+
+        .edit-ctrl-btn:hover {{
+            background: #E4E4E4;
+            border-color: #AAA;
+        }}
+
+        .edit-ctrl-btn:active {{
+            transform: scale(0.97);
+        }}
+
+        .edit-ctrl-btn .edit-ctrl-icon {{
+            font-size: 10px;
+            font-family: 'Consolas', monospace;
+            line-height: 1;
+        }}
+
+        .edit-ctrl-btn.is-light {{
+            background: #FFF5E1;
+            border-color: #E0B060;
+            color: #7A4E00;
+        }}
+
+        /* ====== Chat UUID in header ====== */
+        .chat-uuid-wrap {{
+            display: inline-flex;
+            align-items: stretch;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid #444;
+            border-radius: 3px;
+            overflow: hidden;
+        }}
+
+        .chat-uuid {{
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 11px;
+            color: #9AAFC4;
+            user-select: all;
+            padding: 3px 8px;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            line-height: 18px;
+        }}
+
+        .chat-uuid-copy {{
+            background: none;
+            border: none;
+            border-left: 1px solid #444;
+            cursor: pointer;
+            padding: 0 7px;
+            color: #9AAFC4;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 10px;
+        }}
+
+        .chat-uuid-copy:hover {{
+            background: rgba(255,255,255,0.08);
+            color: #FFF;
+        }}
+
+        .chat-uuid-copy.copied {{
+            color: #6AB06F;
+        }}
+
+        @media (max-width: 900px) {{
+            .chat-uuid-wrap {{
+                display: none;
+            }}
+        }}
+
+        .msg-footer {{
+            padding-left: 12px;
+            margin-top: 1px;
+            font-size: 10px;
+            color: #BBB;
+            display: flex;
+            gap: 16px;
         }}
 
         .separator {{
-            color: #E0E0E0;
-            margin-top: 4px;
-            font-size: 12px;
+            color: #EEE;
+            margin-top: 2px;
+            font-size: 10px;
+            line-height: 1;
             letter-spacing: -1px;
         }}
 
         .summary-msg {{
             background: #F8F8F8;
             border: 1px solid #E0E0E0;
-            padding: 10px;
-            margin: 10px 0;
+            padding: 6px 10px;
+            margin: 6px 0;
         }}
 
         .summary-header {{
             color: #666;
-            font-size: 12px;
-            margin-bottom: 6px;
+            font-size: 11px;
+            margin-bottom: 4px;
             letter-spacing: -0.5px;
         }}
 
         .summary-content {{
             color: #1E1E1E;
-            padding-left: 10px;
+            padding-left: 8px;
         }}
 
         .snapshot {{
-            color: #999;
-            font-size: 12px;
-            padding: 5px 0;
-            border-left: 2px solid #E0E0E0;
-            padding-left: 10px;
-            margin: 5px 0;
+            color: #BBB;
+            font-size: 11px;
+            padding: 2px 0;
+            border-left: 2px solid #EEE;
+            padding-left: 8px;
+            margin: 2px 0;
         }}
 
         .uuid-small, .cwd-small {{
             font-family: 'Consolas', monospace;
-            font-size: 10px;
+            font-size: 9px;
         }}
 
         .footer {{
@@ -1418,13 +2052,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         /* Compact messages */
         .compact-msg {{
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }}
         .compact-inner {{
             background: #F5F3FF;
             border-left: 3px solid #8B5CF6;
-            padding: 8px 10px;
-            border-radius: 4px;
+            padding: 4px 8px;
+            border-radius: 3px;
         }}
         .compact-msg .compact-header {{
             display: flex;
@@ -1437,13 +2071,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         /* AskUserQuestion result */
         .ask-result-msg {{
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }}
         .ask-inner {{
             background: #FFFBEB;
             border-left: 3px solid #FCD34D;
-            padding: 8px 10px;
-            border-radius: 4px;
+            padding: 4px 8px;
+            border-radius: 3px;
         }}
 
         /* Stdout messages */
@@ -1458,6 +2092,9 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .message.ask-result-msg.nav-highlight {{
             animation: navPulseAsk 1.5s ease-out;
         }}
+        .message.reject-msg.nav-highlight {{
+            animation: navPulseReject 1.5s ease-out;
+        }}
         @keyframes navPulseCompact {{
             0% {{ box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.5); }}
             50% {{ box-shadow: 0 0 0 8px rgba(139, 92, 246, 0.2); }}
@@ -1467,6 +2104,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             0% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.5); }}
             50% {{ box-shadow: 0 0 0 8px rgba(217, 119, 6, 0.2); }}
             100% {{ box-shadow: 0 0 0 0 rgba(217, 119, 6, 0); }}
+        }}
+        @keyframes navPulseReject {{
+            0% {{ box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }}
+            50% {{ box-shadow: 0 0 0 8px rgba(220, 38, 38, 0.2); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }}
         }}
 
         /* Custom scrollbar */
@@ -1513,9 +2155,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             <div class="terminal-title">
                 <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
                 <span>Code Chat Viewer</span>
+                <span class="app-version" style="color:#777;font-size:11px;margin-left:8px;">v{APP_VERSION}</span>
                 {'<span class="chat-name-sep">|</span><span class="chat-name">' + escape(chat_title) + '</span>' if chat_title else ''}
             </div>
             <div class="header-actions">
+                {('<span class="chat-uuid-wrap" title="Chat UUID"><span class="chat-uuid">' + escape(chat_uuid) + '</span><button class="chat-uuid-copy" onclick="copyChatUuid(this)" title="Copy UUID"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/></svg></button></span>') if chat_uuid else ''}
                 {header_actions_html}
             </div>
             <div class="terminal-controls">
@@ -1532,7 +2176,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 Assistant: {assistant_msgs} |
                 Tool Results: {tool_result_msgs} |
                 Summaries: {summaries} |
-                Snapshots: {snapshots}
+                Snapshots: {snapshots} |
+                BTW: {btw_count}
             </div>
             <div>
                 Date: {chat_date} | Time: {chat_time}
@@ -1541,6 +2186,15 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         <div class="search-bar">
             <input type="text" class="search-input" id="searchInput" placeholder="Filter conversation...">
+            <div class="edit-ctrl-group">
+                <button class="edit-ctrl-btn" id="editToggleCollapse" title="Expand / collapse all Edit and Write blocks">
+                    <span class="edit-ctrl-icon" id="editToggleIcon">&#9654;</span>
+                    <span id="editToggleLabel">Edits/Writes</span>
+                </button>
+                <button class="edit-ctrl-btn edit-ctrl-btn-theme" id="editToggleTheme" title="Toggle Edit diff theme (dark / light)">
+                    <span id="editToggleThemeLabel">Light</span>
+                </button>
+            </div>
             <div class="msg-nav">
                 <button class="nav-mode-btn active" id="navAll" title="All messages">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><defs><linearGradient id="navGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0066CC"/><stop offset="100%" stop-color="#10893E"/></linearGradient></defs><path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/></svg>
@@ -1563,9 +2217,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         <div class="footer">
             <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank" style="color: #666; text-decoration: none;">Code Chat Viewer</a> |
-            <a href="https://nucleoia.es" target="_blank" style="color: #666; text-decoration: none;">nucleoia.es</a> |
             Processed {len(messages_html)} elements from {total_lines} total lines |
-            <a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" style="color: #666; text-decoration: none;">Feedback</a>
+            <a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener" style="color: #666; text-decoration: none;">Feedback</a>
         </div>
     </div>
 
@@ -1687,13 +2340,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         // ====== SEARCH ======
         document.getElementById('searchInput').addEventListener('input', function(e) {{
             const searchTerm = e.target.value.toLowerCase();
-            const messages = document.querySelectorAll('.message, .summary-msg, .tool-result-msg');
+            const messages = document.querySelectorAll('.message, .summary-msg, .tool-result-msg, .snapshot');
 
             let visibleCount = 0;
             messages.forEach(message => {{
                 const text = message.textContent.toLowerCase();
                 if (text.includes(searchTerm)) {{
-                    message.style.display = 'block';
+                    message.style.display = '';
                     visibleCount++;
                 }} else {{
                     message.style.display = 'none';
@@ -1703,48 +2356,73 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             console.log(`Showing ${{visibleCount}} of ${{messages.length}} messages`);
         }});
 
-        // Toggle for collapsible tool results
+        // Toggle for collapsible tool results — the `▶` marker is already in
+        // the server-rendered HTML; here we only attach the click handler.
         document.addEventListener('DOMContentLoaded', function() {{
-            const toolResults = document.querySelectorAll('.tool-result-msg');
+            document.querySelectorAll('.tool-result-msg').forEach(toolResult => {{
+                const header = toolResult.querySelector(':scope > .msg-header');
+                const content = toolResult.querySelector(':scope > .msg-content');
+                const toggle = header && header.querySelector(':scope > .tool-result-toggle');
+                if (!header || !content || !toggle) return;
 
-            toolResults.forEach(toolResult => {{
-                const header = toolResult.querySelector('.msg-header');
-                const content = toolResult.querySelector('.msg-content');
-
-                if (header && content) {{
-                    // Create collapsible structure
-                    const toggle = document.createElement('span');
-                    toggle.className = 'tool-result-toggle collapsed';
-                    toggle.innerHTML = '▼';
-
-                    const newHeader = document.createElement('div');
-                    newHeader.className = 'tool-result-header';
-                    newHeader.appendChild(toggle);
-                    newHeader.appendChild(header.cloneNode(true));
-
-                    const newContent = document.createElement('div');
-                    newContent.className = 'tool-result-content';
-                    newContent.appendChild(content.cloneNode(true));
-
-                    // Clear and rebuild
-                    toolResult.innerHTML = '';
-                    toolResult.appendChild(newHeader);
-                    toolResult.appendChild(newContent);
-
-                    // Footer if present
-                    const footer = toolResult.querySelector('.msg-footer');
-                    if (footer) {{
-                        newContent.appendChild(footer);
-                    }}
-
-                    // Click event
-                    newHeader.addEventListener('click', function() {{
-                        toggle.classList.toggle('collapsed');
-                        newContent.classList.toggle('expanded');
-                    }});
-                }}
+                header.addEventListener('click', function() {{
+                    const open = content.classList.toggle('expanded');
+                    toggle.classList.toggle('expanded', open);
+                }});
             }});
         }});
+
+        // ====== Chat UUID: copy to clipboard ======
+        function copyChatUuid(btn) {{
+            const uuid = btn.parentNode.querySelector('.chat-uuid').textContent;
+            navigator.clipboard.writeText(uuid).then(function() {{
+                const orig = btn.innerHTML;
+                btn.innerHTML = '✓';
+                btn.classList.add('copied');
+                setTimeout(function() {{
+                    btn.innerHTML = orig;
+                    btn.classList.remove('copied');
+                }}, 1200);
+            }});
+        }}
+
+        // ====== Edit blocks: expand / collapse all ======
+        (function() {{
+            const btn = document.getElementById('editToggleCollapse');
+            if (!btn) return;
+            const icon = document.getElementById('editToggleIcon');
+            const getBlocks = () => document.querySelectorAll('details.tool-use-edit, details.tool-use-write');
+            const refresh = () => {{
+                const blocks = getBlocks();
+                const anyOpen = Array.from(blocks).some(d => d.open);
+                icon.innerHTML = anyOpen ? '&#9660;' : '&#9654;';
+            }};
+            btn.addEventListener('click', function() {{
+                const blocks = getBlocks();
+                if (!blocks.length) return;
+                const anyOpen = Array.from(blocks).some(d => d.open);
+                blocks.forEach(d => {{ d.open = !anyOpen; }});
+                refresh();
+            }});
+            document.addEventListener('toggle', function(e) {{
+                if (e.target && e.target.classList && (e.target.classList.contains('tool-use-edit') || e.target.classList.contains('tool-use-write'))) {{
+                    refresh();
+                }}
+            }}, true);
+            refresh();
+        }})();
+
+        // ====== Edit diff: theme toggle (dark default / light) ======
+        (function() {{
+            const btn = document.getElementById('editToggleTheme');
+            if (!btn) return;
+            const label = document.getElementById('editToggleThemeLabel');
+            btn.addEventListener('click', function() {{
+                const isLight = document.body.classList.toggle('edit-diff-light');
+                btn.classList.toggle('is-light', isLight);
+                label.textContent = isLight ? 'Dark' : 'Light';
+            }});
+        }})();
 
         // Scroll to top on load
         window.addEventListener('load', function() {{
@@ -1766,6 +2444,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     print(f"   - Tool results: {tool_result_msgs}")
     print(f"   - Summaries: {summaries}")
     print(f"   - Snapshots: {snapshots}")
+    print(f"   - BTW (history): {btw_count}")
     print(f"   - HTML elements generated: {len(messages_html)}")
 
 def get_chat_timestamp(messages: List[Dict]) -> str:
@@ -1831,7 +2510,34 @@ def main():
         print(f"Generated filename: {output_file}")
 
     print(f"Generating HTML in terminal style...")
-    generate_html(messages, output_file)
+    chat_uuid = Path(input_file).stem
+
+    # Load history.jsonl from `~/.claude/` (input_file is .../projects/<proj>/<uuid>.jsonl)
+    history_entries = []
+    try:
+        history_path = Path(input_file).resolve().parent.parent.parent / 'history.jsonl'
+        if history_path.exists():
+            with open(history_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    disp = e.get('display', '') or ''
+                    if not disp.startswith('/btw'):
+                        continue
+                    rest = disp[len('/btw'):].lstrip()
+                    if not rest:
+                        continue
+                    history_entries.append({
+                        'query': rest,
+                        'timestamp': e.get('timestamp', 0),
+                        'sessionId': e.get('sessionId', ''),
+                    })
+    except OSError:
+        history_entries = []
+
+    generate_html(messages, output_file, chat_uuid=chat_uuid, history_entries=history_entries)
 
     print(f"\nConversion completed!")
     print(f"Open file: {output_file}")

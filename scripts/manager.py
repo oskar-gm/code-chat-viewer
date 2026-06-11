@@ -170,6 +170,10 @@ def load_config() -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    # Time display format for timestamps: "12h" (AM/PM, default) or "24h".
+    tf = str(config.get("time_format", "12h")).lower()
+    config["time_format"] = tf if tf in ("12h", "24h") else "12h"
+
     # Resolve paths
     source_path = Path(config["source"]["projects_path"]).expanduser().resolve()
     output_path = Path(config["output"]["folder"]).expanduser()
@@ -200,6 +204,7 @@ def load_config() -> dict:
 
 sys.path.insert(0, str(SCRIPT_DIR))
 from visualizer import (  # noqa: E402
+    APP_VERSION,
     parse_chat_json,
     generate_html,
     get_chat_timestamp,
@@ -286,7 +291,9 @@ def resolve_chat_title(jsonl_path: Path, sessions_meta: dict = None) -> str:
 def generate_chat_html(
     jsonl_path: Path, output_dir: Path, agent_suffix: str = "",
     dashboard_filename: str = "CCV-Dashboard.html",
-    sessions_meta: dict = None
+    sessions_meta: dict = None,
+    history_entries: list = None,
+    time_format: str = "12h",
 ) -> tuple[str | None, str | None]:
     """Generate HTML for a single chat file.
 
@@ -318,6 +325,9 @@ def generate_chat_html(
                 messages, str(output_path),
                 dashboard_url=dashboard_filename,
                 chat_title=chat_title,
+                chat_uuid=jsonl_path.stem,
+                history_entries=history_entries,
+                time_format=time_format,
             )
 
         return base_name, None
@@ -760,12 +770,30 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
     return result
 
 
+def _fmt_dt(dt, time_format: str = "12h") -> str:
+    """Format a datetime as `YYYY-MM-DD <time>`; time per time_format (12h/24h)."""
+    pat = "%H:%M" if time_format == "24h" else "%I:%M %p"
+    return dt.strftime(f"%Y-%m-%d {pat}")
+
+
 def collect_chats_data(config: dict) -> list[dict]:
     """Collect metadata for all generated HTML chat files."""
     output_path = config["_resolved"]["output_path"]
     source_path = config["_resolved"]["source_path"]
     index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
     sessions_meta = build_sessions_index(source_path)
+
+    # Pre-build a {sessionId: btw_count} map from history.jsonl so the dashboard
+    # can show a /btw count column without re-reading each chat's HTML.
+    history_path = source_path.parent / "history.jsonl"
+    if not history_path.exists():
+        history_path = Path.home() / ".claude" / "history.jsonl"
+    btw_counts: dict[str, int] = {}
+    if history_path.exists():
+        for e in _collect_btw_history(history_path):
+            sid = e.get("sessionId") or ""
+            if sid:
+                btw_counts[sid] = btw_counts.get(sid, 0) + 1
 
     chats_data = []
     seen_hashes = set()
@@ -818,18 +846,18 @@ def collect_chats_data(config: dict) -> list[dict]:
                 created_dt = datetime.fromisoformat(
                     created.replace("Z", "+00:00")
                 ).astimezone()
-                created_str = created_dt.strftime("%Y-%m-%d %H:%M")
+                created_str = _fmt_dt(created_dt, config["time_format"])
                 created_sort = created_dt.timestamp()
             except (ValueError, OSError):
                 created_str = (
-                    parsed["date"].strftime("%Y-%m-%d %H:%M") if parsed["date"] else "N/A"
+                    _fmt_dt(parsed["date"], config["time_format"]) if parsed["date"] else "N/A"
                 )
                 created_sort = parsed["date"].timestamp() if parsed["date"] else 0
             try:
                 modified_dt = datetime.fromisoformat(
                     modified.replace("Z", "+00:00")
                 ).astimezone()
-                modified_str = modified_dt.strftime("%Y-%m-%d %H:%M")
+                modified_str = _fmt_dt(modified_dt, config["time_format"])
                 modified_sort = modified_dt.timestamp()
             except (ValueError, OSError):
                 modified_sort = 0
@@ -839,7 +867,7 @@ def collect_chats_data(config: dict) -> list[dict]:
                 jsonl_mtime = jsonl_file.stat().st_mtime
                 if jsonl_mtime > modified_sort:
                     mt = datetime.fromtimestamp(jsonl_mtime)
-                    modified_str = mt.strftime("%Y-%m-%d %H:%M")
+                    modified_str = _fmt_dt(mt, config["time_format"])
                     modified_sort = jsonl_mtime
             elif modified_sort == 0:
                 modified_str = "N/A"
@@ -877,7 +905,7 @@ def collect_chats_data(config: dict) -> list[dict]:
             summary = ""
 
             if parsed["date"]:
-                created_str = parsed["date"].strftime("%Y-%m-%d %H:%M")
+                created_str = _fmt_dt(parsed["date"], config["time_format"])
                 created_sort = parsed["date"].timestamp()
             else:
                 created_str = "N/A"
@@ -885,15 +913,24 @@ def collect_chats_data(config: dict) -> list[dict]:
 
             if jsonl_file:
                 mt = datetime.fromtimestamp(jsonl_file.stat().st_mtime)
-                modified_str = mt.strftime("%Y-%m-%d %H:%M")
+                modified_str = _fmt_dt(mt, config["time_format"])
                 modified_sort = mt.timestamp()
             else:
                 modified_str = created_str
                 modified_sort = created_sort
 
+        # Full session ID: from sessions-index, JSONL filename, or hash prefix
+        if meta and meta.get("sessionId"):
+            session_id_full = meta["sessionId"]
+        elif jsonl_file and not jsonl_file.name.startswith("agent-"):
+            session_id_full = jsonl_file.stem
+        else:
+            session_id_full = hash_prefix
+
         chats_data.append(
             {
                 "session_id": hash_prefix,
+                "session_id_full": session_id_full,
                 "name": name,
                 "project": project,
                 "project_full": project_full,
@@ -908,6 +945,7 @@ def collect_chats_data(config: dict) -> list[dict]:
                 "summary": summary,
                 "html_link": html_link,
                 "html_size": html_size,
+                "btw_count": btw_counts.get(session_id_full, 0),
             }
         )
 
@@ -950,17 +988,29 @@ def generate_index(config: dict) -> int:
         if chat["messages"] > 0:
             msgs_cell = f'<td class="num-cell">{chat["messages"]}</td>'
         else:
-            msgs_cell = '<td class="num-cell"><span class="tooltip"><span class="help-icon">?</span><span class="tooltip-text">No enriched data available. This chat is not indexed in Claude Code sessions-index.json. Common with old, very short, agent, or recently active sessions.</span></span></td>'
+            # Native title tooltip: an HTML tooltip span here overflowed the cell
+            # and stretched the whole fixed-layout table scroll area.
+            msgs_cell = '<td class="num-cell" title="No enriched data available. This chat is not indexed in Claude Code sessions-index.json. Common with old, very short, agent, or recently active sessions.">?</td>'
 
-        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}">
-<td class="name-cell" title="{escape(chat['summary'])}">{escape(chat['name'][:60])}{"..." if len(chat['name']) > 60 else ""}</td>
+        uuid_full = chat['session_id_full']
+
+        btw_n = chat.get("btw_count", 0)
+        btw_cell = (
+            f'<td class="hidden-col btw-col num-cell">{btw_n}</td>'
+            if btw_n
+            else '<td class="hidden-col btw-col num-cell"></td>'
+        )
+
+        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}">
+<td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
 <td class="category-cell {cat_class}">{escape(chat['category'])}</td>
 <td class="date-cell">{escape(str(chat['created']))}</td>
 <td class="date-cell">{escape(str(chat['modified']))}</td>
 {msgs_cell}
-<td class="hidden-col uuid-col">{escape(chat['session_id'][:12])}...</td>
+<td class="uuid-col" title="{escape(uuid_full)}"><span class="uuid-text">{escape(uuid_full)}</span> <button class="copy-btn" onclick="copyUuid(this)" title="Copy UUID"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></td>
+{btw_cell}
 <td class="hidden-col branch-col">{escape(chat['branch'])}</td>
 <td class="hidden-col size-col">{chat['html_size'] // 1024}KB</td>
 <td class="hidden-col prompt-col" title="{escape(chat['first_prompt'])}">{escape(chat['first_prompt'][:40])}{"..." if len(chat['first_prompt']) > 40 else ""}</td>
@@ -1009,7 +1059,7 @@ def generate_index(config: dict) -> int:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="Code Chat Viewer v2.2.0">
+    <meta name="generator" content="Code Chat Viewer v{APP_VERSION}">
     <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
     <title>Code Chat Viewer - Dashboard</title>
     <style>
@@ -1077,6 +1127,17 @@ def generate_index(config: dict) -> int:
         .header-btn.feedback:hover {{
             background: #007ACC;
             border-color: #007ACC;
+            color: #FFF;
+        }}
+
+        .header-btn.release {{
+            border-color: #10893E;
+            color: #6BCB8B;
+        }}
+
+        .header-btn.release:hover {{
+            background: #10893E;
+            border-color: #10893E;
             color: #FFF;
         }}
 
@@ -1217,11 +1278,20 @@ def generate_index(config: dict) -> int:
         .table-container {{
             padding: 15px 20px;
             flex: 1;
-            overflow: auto;
+            min-width: 0;
+            overflow-y: scroll;
+            overflow-x: auto;
         }}
 
+        /* Column widths live as data-width on each <th>; syncColumnWidths()
+           applies them (0px while hidden — in fixed layout Chromium lets
+           display:none headers contribute their width as ghost columns).
+           Name has no width: it flexes and absorbs the leftover space.
+           The table min-width (visible columns + Name minimum) keeps
+           horizontal scroll appearing only when columns no longer fit. */
         table {{
             width: 100%;
+            table-layout: fixed;
             border-collapse: collapse;
             font-size: 12px;
         }}
@@ -1230,6 +1300,7 @@ def generate_index(config: dict) -> int:
             padding: 8px 10px;
             text-align: left;
             border-bottom: 1px solid #E0E0E0;
+            overflow: hidden;
         }}
 
         th {{
@@ -1247,20 +1318,18 @@ def generate_index(config: dict) -> int:
 
         tr:hover {{ background: #F8F8F8; }}
 
-        .link-cell {{ width: 30px; text-align: center; }}
+        .link-cell {{ text-align: center; }}
         .link-cell a {{ color: #007ACC; display: inline-flex; }}
         .link-cell a:hover {{ color: #005A9E; }}
         .no-link {{ color: #CCC; }}
 
         .name-cell {{
-            max-width: 300px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }}
 
         .project-cell {{
-            max-width: 150px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -1280,17 +1349,66 @@ def generate_index(config: dict) -> int:
         .category-cell.no-html {{ background: #FFE0E0; color: #C00; }}
 
         .date-cell {{ white-space: nowrap; font-size: 11px; color: #666; }}
-        .num-cell {{ text-align: right; font-family: monospace; }}
-        .hidden-col {{ display: none; }}
-        .uuid-col {{ font-family: monospace; font-size: 10px; color: #999; }}
+        .num-cell {{ text-align: right; font-family: monospace; white-space: nowrap; }}
+        /* Hidden columns collapse to true 0px instead of display:none —
+           in fixed layout Chromium keeps counting display:none cells in the
+           table scroll area, leaving ghost blank space after the last column. */
+        .hidden-col {{
+            padding: 0 !important;
+            border: 0 !important;
+            font-size: 0;
+            overflow: hidden;
+            white-space: nowrap;
+        }}
+        .branch-col {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .uuid-col {{
+            font-family: monospace;
+            font-size: 10px;
+            color: #999;
+            overflow: hidden;
+            white-space: nowrap;
+        }}
+        .uuid-col .uuid-text {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: inline-block;
+            max-width: 100px;
+            vertical-align: middle;
+        }}
+        .copy-btn {{
+            background: none;
+            border: 1px solid #DDD;
+            border-radius: 3px;
+            cursor: pointer;
+            padding: 2px 4px;
+            color: #999;
+            vertical-align: middle;
+            line-height: 1;
+            transition: all 0.15s;
+        }}
+        .copy-btn:hover {{
+            background: #F0F0F0;
+            border-color: #999;
+            color: #333;
+        }}
 
         .prompt-col {{
-            max-width: 200px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
             font-size: 11px;
             color: #666;
+        }}
+
+        .btw-col {{
+            font-family: monospace;
+            font-size: 11px;
+            text-align: right;
+            white-space: nowrap;
         }}
 
         .footer {{
@@ -1312,9 +1430,11 @@ def generate_index(config: dict) -> int:
         <div class="header-title">
             <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
             <span>Code Chat Viewer - Dashboard</span>
+            <span class="app-version" style="color:#999;font-size:11px;margin-left:8px;">v{APP_VERSION}</span>
         </div>
         <div class="header-actions">
-            <a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback" class="header-btn feedback" title="Send feedback">Feedback</a>
+            <a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener" class="header-btn feedback" title="Report an issue or send feedback on GitHub">Feedback</a>
+            <a href="https://github.com/oskar-gm/code-chat-viewer/releases/latest" target="_blank" rel="noopener" class="header-btn release" title="Latest release — check for updates">Latest release</a>
         </div>
         <div class="header-controls">
             <span class="terminal-btn btn-close"></span>
@@ -1325,7 +1445,7 @@ def generate_index(config: dict) -> int:
 
     <div class="stats-bar">
         <div>{stats_line}</div>
-        <div>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+        <div>Generated: {_fmt_dt(datetime.now(), config["time_format"])}</div>
     </div>
 
     <div class="toolbar">
@@ -1346,7 +1466,7 @@ def generate_index(config: dict) -> int:
 
         <div class="columns-toggle">
             <span>Columns:</span>
-            <label><input type="checkbox" data-col="uuid-col"> UUID</label>
+            <label><input type="checkbox" data-col="btw-col"> BTW</label>
             <label><input type="checkbox" data-col="branch-col"> Branch</label>
             <label><input type="checkbox" data-col="size-col"> Size</label>
             <label><input type="checkbox" data-col="prompt-col"> First prompt</label>
@@ -1358,16 +1478,17 @@ def generate_index(config: dict) -> int:
             <thead>
                 <tr>
                     <th data-sort="name">Name</th>
-                    <th data-sort="none">Link</th>
-                    <th data-sort="project">Project</th>
-                    <th data-sort="category">Category</th>
-                    <th data-sort="created">Created</th>
-                    <th data-sort="modified" class="sorted-desc">Last Used</th>
-                    <th data-sort="messages">Msgs</th>
-                    <th class="hidden-col uuid-col" data-sort="none">UUID</th>
-                    <th class="hidden-col branch-col" data-sort="branch">Branch</th>
-                    <th class="hidden-col size-col" data-sort="none">Size</th>
-                    <th class="hidden-col prompt-col" data-sort="none">First prompt</th>
+                    <th data-sort="none" data-width="40">Link</th>
+                    <th data-sort="project" data-width="130">Project</th>
+                    <th data-sort="category" data-width="95">Category</th>
+                    <th data-sort="created" data-width="160">Created</th>
+                    <th data-sort="modified" class="sorted-desc" data-width="160">Last Used</th>
+                    <th data-sort="messages" data-width="64">Msgs</th>
+                    <th class="uuid-col" data-sort="none" data-width="140">UUID</th>
+                    <th class="hidden-col btw-col" data-sort="btw" data-width="64">BTW</th>
+                    <th class="hidden-col branch-col" data-sort="branch" data-width="130">Branch</th>
+                    <th class="hidden-col size-col" data-sort="none" data-width="72">Size</th>
+                    <th class="hidden-col prompt-col" data-sort="none" data-width="200">First prompt</th>
                 </tr>
             </thead>
             <tbody>
@@ -1377,9 +1498,7 @@ def generate_index(config: dict) -> int:
     </div>
 
     <div class="footer">
-        <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank">Code Chat Viewer</a> |
-        <a href="https://nucleoia.es" target="_blank">nucleoia.es</a> |
-        <a href="mailto:oscar@nucleoia.es?subject=Code%20Chat%20Viewer%20-%20Feedback">Feedback</a>
+        <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank">Code Chat Viewer</a> |        <a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener">Feedback</a>
     </div>
 
     <script>
@@ -1447,8 +1566,11 @@ def generate_index(config: dict) -> int:
                 }} else if (col === 'messages') {{
                     aVal = parseInt(a.dataset.messages) || 0;
                     bVal = parseInt(b.dataset.messages) || 0;
+                }} else if (col === 'btw') {{
+                    aVal = parseInt(a.dataset.btw) || 0;
+                    bVal = parseInt(b.dataset.btw) || 0;
                 }} else {{
-                    const colIndex = {{ name: 0, project: 2, category: 3, branch: 8 }}[col] || 0;
+                    const colIndex = {{ name: 0, project: 2, category: 3, branch: 9 }}[col] || 0;
                     aVal = a.cells[colIndex]?.textContent.toLowerCase() || '';
                     bVal = b.cells[colIndex]?.textContent.toLowerCase() || '';
                 }}
@@ -1481,6 +1603,23 @@ def generate_index(config: dict) -> int:
             }});
         }}
 
+        /* Column sizing (fixed layout): visible columns get their data-width,
+           hidden ones get 0px so they cannot contribute ghost width to the
+           table grid. Table min-width = visible columns + Name minimum, so
+           horizontal scroll only appears when columns no longer fit and the
+           flexible Name column never gets crushed below its minimum. */
+        const NAME_MIN_PX = 240;
+        function syncColumnWidths() {{
+            let sum = NAME_MIN_PX;
+            document.querySelectorAll('#chatsTable thead th').forEach(th => {{
+                if (!th.dataset.width) return;
+                const hidden = th.classList.contains('hidden-col');
+                th.style.width = hidden ? '0px' : th.dataset.width + 'px';
+                if (!hidden) sum += parseInt(th.dataset.width, 10);
+            }});
+            document.getElementById('chatsTable').style.minWidth = sum + 'px';
+        }}
+
         /* Column toggles */
         document.querySelectorAll('.columns-toggle input[data-col]').forEach(checkbox => {{
             checkbox.addEventListener('change', () => {{
@@ -1489,6 +1628,7 @@ def generate_index(config: dict) -> int:
                 document.querySelectorAll('.' + colClass).forEach(el => {{
                     el.classList.toggle('hidden-col', !show);
                 }});
+                syncColumnWidths();
                 saveState();
             }});
         }});
@@ -1520,7 +1660,17 @@ def generate_index(config: dict) -> int:
             }}
         }}
 
+        syncColumnWidths();
         filterTable();
+
+        /* Copy UUID to clipboard */
+        function copyUuid(btn) {{
+            const uuid = btn.closest('.uuid-col').querySelector('.uuid-text').textContent;
+            navigator.clipboard.writeText(uuid);
+            const orig = btn.innerHTML;
+            btn.textContent = 'OK';
+            setTimeout(function() {{ btn.innerHTML = orig; }}, 1000);
+        }}
     </script>
 </body>
 </html>'''
@@ -1537,12 +1687,470 @@ def generate_index(config: dict) -> int:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# BTW Queries view (option [3])
+# ---------------------------------------------------------------------------
+
+
+def _collect_btw_history(history_path: Path) -> list[dict]:
+    """Read ~/.claude/history.jsonl and return all `/btw <query>` entries.
+    Skips empty `/btw` invocations (the ones that produced `Usage:` errors)."""
+    entries = []
+    if not history_path.exists():
+        return entries
+    with open(history_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            display = e.get("display", "") or ""
+            if not display.startswith("/btw"):
+                continue
+            # Strip "/btw " prefix to extract the question text
+            rest = display[len("/btw"):].lstrip()
+            if not rest:
+                continue  # Skip empty `/btw` invocations
+            entries.append({
+                "query": rest,
+                "timestamp": e.get("timestamp", 0),
+                "project": e.get("project", ""),
+                "sessionId": e.get("sessionId", ""),
+            })
+    return entries
+
+
+def _find_jsonl_by_session(source_path: Path, session_id: str) -> Path | None:
+    """Find a JSONL file in source_path by exact session ID."""
+    if not session_id:
+        return None
+    for project_dir in source_path.iterdir():
+        if not project_dir.is_dir():
+            continue
+        candidate = project_dir / f"{session_id}.jsonl"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_session_meta(
+    source_path: Path, session_id: str, project_field: str,
+    sessions_meta: dict, output_path: Path
+) -> dict:
+    """Resolve human-readable metadata for a session given its ID + project path.
+
+    Returns: {title, project, project_full, html_link}
+      - html_link: relative path to the chat HTML (if generated) or empty.
+    """
+    title = "Untitled chat"
+    project = format_project_name(Path(project_field).name) if project_field else ""
+    project_full = project_field
+    html_link = ""
+
+    jsonl_file = _find_jsonl_by_session(source_path, session_id)
+    if jsonl_file:
+        try:
+            title = resolve_chat_title(jsonl_file, sessions_meta)
+        except Exception:
+            pass
+        project = format_project_name(jsonl_file.parent.name)
+        # Try to locate the generated HTML
+        hash_prefix = get_hash_from_filename(jsonl_file.name)
+        existing = find_existing_html(output_path, hash_prefix)
+        if existing:
+            try:
+                html_link = str(existing.relative_to(output_path))
+            except ValueError:
+                html_link = existing.name
+
+    return {
+        "title": title,
+        "project": project,
+        "project_full": project_full,
+        "html_link": html_link,
+    }
+
+
+def generate_btw_view(config: dict) -> Path | None:
+    """Aggregate all /btw queries from ~/.claude/history.jsonl and produce
+    btw.html alongside the dashboard. Queries are grouped by chat (session),
+    sorted by latest activity within each chat.
+
+    Returns the output file path, or None if no /btw queries were found."""
+    source_path = config["_resolved"]["source_path"]
+    output_path = config["_resolved"]["output_path"]
+    index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
+
+    # history.jsonl lives at ~/.claude/history.jsonl (the parent of projects/)
+    history_path = source_path.parent / "history.jsonl"
+    if not history_path.exists():
+        history_path = Path.home() / ".claude" / "history.jsonl"
+
+    entries = _collect_btw_history(history_path)
+    if not entries:
+        print(f"  No /btw queries found in {history_path}")
+        return None
+
+    print(f"  Found {len(entries)} /btw queries in history.jsonl")
+
+    # Group by sessionId
+    by_session: dict[str, list[dict]] = {}
+    for e in entries:
+        sid = e.get("sessionId") or "unknown"
+        by_session.setdefault(sid, []).append(e)
+
+    sessions_meta = build_sessions_index(source_path)
+
+    groups = []
+    for sid, items in by_session.items():
+        items.sort(key=lambda x: x.get("timestamp", 0))
+        latest = items[-1].get("timestamp", 0)
+        first_project = items[0].get("project", "") if items else ""
+        meta = _resolve_session_meta(
+            source_path, sid, first_project, sessions_meta, output_path
+        )
+        groups.append({
+            "session_id": sid,
+            "title": meta["title"],
+            "project": meta["project"],
+            "project_full": meta["project_full"],
+            "html_link": meta["html_link"],
+            "queries": items,
+            "latest_ts": latest,
+            "count": len(items),
+        })
+
+    # Sort sessions by latest /btw activity (most recent first)
+    groups.sort(key=lambda g: -g["latest_ts"])
+
+    total_queries = sum(g["count"] for g in groups)
+    total_sessions = len(groups)
+    all_ts = [q["timestamp"] for g in groups for q in g["queries"] if q.get("timestamp")]
+    first_dt = datetime.fromtimestamp(min(all_ts) / 1000).strftime("%Y-%m-%d") if all_ts else "—"
+    last_dt = datetime.fromtimestamp(max(all_ts) / 1000).strftime("%Y-%m-%d") if all_ts else "—"
+
+    # Build HTML for each group (each chat = collapsible <details>)
+    sections_html = []
+    for g in groups:
+        title_html = escape(g["title"])
+        if g["html_link"]:
+            title_html = (
+                f'<a href="{escape(g["html_link"])}" class="btw-session-link" '
+                f'title="Open chat in CCV" onclick="event.stopPropagation()">{title_html} '
+                f'<span class="btw-open-icon">↗</span></a>'
+            )
+        queries_html = []
+        for q in g["queries"]:
+            ts = q.get("timestamp", 0)
+            try:
+                dt_str = _fmt_dt(datetime.fromtimestamp(ts / 1000), config["time_format"])
+            except (ValueError, OSError, OverflowError):
+                dt_str = "—"
+            queries_html.append(
+                f'<article class="btw-query">'
+                f'<div class="btw-q-text">{escape(q["query"])}</div>'
+                f'<div class="btw-q-meta">{escape(dt_str)}</div>'
+                f'</article>'
+            )
+        proj_chip = (
+            f'<span class="btw-chip btw-chip-proj" title="{escape(g["project_full"])}">{escape(g["project"])}</span>'
+            if g["project"] else ""
+        )
+        sections_html.append(
+            f'<details class="btw-session">'
+            f'<summary class="btw-session-header">'
+            f'<span class="btw-toggle">▼</span>'
+            f'<span class="btw-session-title">{title_html}</span>'
+            f'<span class="btw-session-meta">'
+            f'<span class="btw-chip btw-chip-count">{g["count"]}</span>'
+            f'{proj_chip}'
+            f'<span class="btw-chip btw-chip-uuid" title="Session UUID">{escape(g["session_id"][:8])}</span>'
+            f'</span>'
+            f'</summary>'
+            f'<div class="btw-queries">'
+            f'{"".join(queries_html)}'
+            f'</div>'
+            f'</details>'
+        )
+
+    sections_block = "\n".join(sections_html)
+    gen_time = _fmt_dt(datetime.now(), config["time_format"])
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="Code Chat Viewer v{APP_VERSION} — BTW view">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
+    <title>Code Chat Viewer — BTW Queries</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ height: 100%; }}
+        body {{
+            font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: #FFFFFF;
+            color: #1E1E1E;
+            font-size: 12px;
+            line-height: 1.45;
+            display: flex;
+            flex-direction: column;
+        }}
+        .btw-header {{
+            background: #2D2D30;
+            color: #CCCCCC;
+            padding: 8px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+        }}
+        .btw-header-title {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+        }}
+        .btw-header-title img {{ height: 14px; width: 14px; }}
+        .btw-header a {{ color: #7EC8F0; text-decoration: none; font-size: 11px; }}
+        .btw-header a:hover {{ text-decoration: underline; }}
+        .btw-stats {{
+            background: #F4F0E8;
+            border-bottom: 1px solid #E0DBCB;
+            padding: 6px 16px;
+            font-size: 11px;
+            color: #6B4226;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .btw-stats strong {{ color: #9A4A2E; font-weight: 600; }}
+        .btw-toolbar {{
+            background: #FAFAFA;
+            border-bottom: 1px solid #E0E0E0;
+            padding: 6px 16px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }}
+        .btw-search {{
+            flex: 1;
+            padding: 4px 10px;
+            border: 1px solid #CCC;
+            border-radius: 3px;
+            font-family: inherit;
+            font-size: 12px;
+            background: #FFF;
+        }}
+        .btw-search:focus {{ outline: none; border-color: #C76A4D; }}
+        .btw-tbtn {{
+            padding: 4px 10px;
+            border: 1px solid #D8CCB8;
+            background: #F4F0E8;
+            color: #6B4226;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+        }}
+        .btw-tbtn:hover {{ background: #EFE6D8; }}
+        .btw-container {{
+            padding: 10px 16px;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }}
+        .btw-session {{
+            background: #FFFFFF;
+            border: 1px solid #E5E0D2;
+            border-left: 3px solid #C76A4D;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            overflow: hidden;
+        }}
+        .btw-session > summary {{
+            list-style: none;
+            cursor: pointer;
+        }}
+        .btw-session > summary::-webkit-details-marker {{ display: none; }}
+        .btw-session-header {{
+            background: #FAF7F2;
+            padding: 6px 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }}
+        .btw-toggle {{
+            color: #C76A4D;
+            font-size: 10px;
+            display: inline-block;
+            width: 10px;
+            transition: transform 0.15s;
+        }}
+        .btw-session:not([open]) .btw-toggle {{ transform: rotate(-90deg); }}
+        .btw-session-title {{
+            font-size: 13px;
+            font-weight: 600;
+            color: #1E1E1E;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .btw-session-link {{ color: #1E1E1E; text-decoration: none; }}
+        .btw-session-link:hover {{ color: #9A4A2E; }}
+        .btw-open-icon {{ color: #9A4A2E; font-size: 11px; margin-left: 3px; }}
+        .btw-session-meta {{
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            flex-shrink: 0;
+        }}
+        .btw-chip {{
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: #EFE6D8;
+            color: #6B4226;
+            font-family: inherit;
+            white-space: nowrap;
+        }}
+        .btw-chip-count {{ background: #C76A4D; color: #FFF; font-weight: 600; }}
+        .btw-chip-uuid {{ font-size: 9px; color: #888; background: #F0F0F0; font-family: 'Consolas', monospace; }}
+        .btw-queries {{ padding: 2px 10px 6px 10px; }}
+        .btw-query {{
+            padding: 6px 9px;
+            margin-top: 4px;
+            background: #FFFFFF;
+            border: 1px solid #F0E8D8;
+            border-left: 2px solid #C76A4D;
+            border-radius: 3px;
+        }}
+        .btw-q-text {{
+            font-size: 13px;
+            color: #1E1E1E;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.45;
+        }}
+        .btw-q-meta {{
+            margin-top: 3px;
+            font-size: 9px;
+            color: #999;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }}
+        .btw-query.hidden {{ display: none; }}
+        .btw-session.hidden {{ display: none; }}
+        .btw-footer {{
+            background: #F3F3F3;
+            border-top: 1px solid #E0E0E0;
+            padding: 6px 16px;
+            text-align: center;
+            color: #666;
+            font-size: 10px;
+        }}
+        .btw-footer a {{ color: #666; text-decoration: none; }}
+        .btw-footer a:hover {{ text-decoration: underline; }}
+        @media (max-width: 700px) {{
+            .btw-stats, .btw-toolbar, .btw-header {{ flex-wrap: wrap; }}
+            .btw-session-title {{ white-space: normal; }}
+        }}
+    </style>
+</head>
+<body>
+    <header class="btw-header">
+        <div class="btw-header-title">
+            <img src="data:image/png;base64,{ICON_BASE64}" alt="">
+            <span>Code Chat Viewer — BTW Queries</span>
+        </div>
+        <div><a href="{escape(index_filename)}">← Back to Dashboard</a></div>
+    </header>
+
+    <div class="btw-stats">
+        <div>
+            <strong>{total_queries}</strong> queries in <strong>{total_sessions}</strong> chats &nbsp;|&nbsp;
+            From <strong>{first_dt}</strong> to <strong>{last_dt}</strong>
+        </div>
+        <div>Generated: {gen_time}</div>
+    </div>
+
+    <div class="btw-toolbar">
+        <input type="text" class="btw-search" id="btwSearch"
+               placeholder="Filter by query text, chat title or project..." autofocus>
+        <button class="btw-tbtn" id="btwToggleAll" title="Expand / collapse all chats">▶ Expand all</button>
+    </div>
+
+    <main class="btw-container">
+{sections_block}
+    </main>
+
+    <footer class="btw-footer">
+        <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank">Code Chat Viewer</a> |        <a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener">Feedback</a>
+    </footer>
+
+    <script>
+        const sessions = document.querySelectorAll('.btw-session');
+
+        // Real-time filter: hide non-matching queries, hide sessions without visible queries,
+        // and auto-open sessions that have matches (so the user sees them).
+        const input = document.getElementById('btwSearch');
+        input.addEventListener('input', function() {{
+            const term = input.value.trim().toLowerCase();
+            sessions.forEach(section => {{
+                const sessionText = section.querySelector('.btw-session-header').textContent.toLowerCase();
+                const sessionMatch = !term || sessionText.includes(term);
+                let anyQueryVisible = false;
+                section.querySelectorAll('.btw-query').forEach(q => {{
+                    const t = q.textContent.toLowerCase();
+                    const match = !term || t.includes(term) || sessionMatch;
+                    q.classList.toggle('hidden', !match);
+                    if (match) anyQueryVisible = true;
+                }});
+                section.classList.toggle('hidden', !anyQueryVisible);
+                if (term && anyQueryVisible) section.open = true;
+            }});
+        }});
+
+        // Toggle expand/collapse all (single button — label reflects next action)
+        const toggleBtn = document.getElementById('btwToggleAll');
+        const refreshToggleLabel = () => {{
+            const visible = Array.from(sessions).filter(s => !s.classList.contains('hidden'));
+            const anyOpen = visible.some(s => s.open);
+            toggleBtn.textContent = anyOpen ? '▶ Collapse all' : '▼ Expand all';
+        }};
+        toggleBtn.addEventListener('click', () => {{
+            const visible = Array.from(sessions).filter(s => !s.classList.contains('hidden'));
+            const anyOpen = visible.some(s => s.open);
+            visible.forEach(s => {{ s.open = !anyOpen; }});
+            refreshToggleLabel();
+        }});
+        document.addEventListener('toggle', e => {{
+            if (e.target && e.target.classList && e.target.classList.contains('btw-session')) {{
+                refreshToggleLabel();
+            }}
+        }}, true);
+        refreshToggleLabel();
+    </script>
+</body>
+</html>"""
+
+    output_file = output_path / "btw.html"
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return output_file
+
+
 def main():
     # Parse flags
     name_search = None
     current_mode = False
     current_jsonl_path = None
     force_regen = "--force" in sys.argv
+    btw_mode = "--btw" in sys.argv
 
     if "--name" in sys.argv:
         idx = sys.argv.index("--name")
@@ -1582,22 +2190,55 @@ def main():
     stats = {"new": [], "updated": [], "skipped": 0, "errors": {}}
     sessions_meta = build_sessions_index(source_path)
 
+    # Pre-load /btw entries from ~/.claude/history.jsonl once for the whole run.
+    # Each chat will only see entries whose sessionId matches its UUID.
+    history_path = source_path.parent / "history.jsonl"
+    if not history_path.exists():
+        history_path = Path.home() / ".claude" / "history.jsonl"
+    history_entries = _collect_btw_history(history_path) if history_path.exists() else []
+
     print(f"  Source:  {source_path}")
     print(f"  Output:  {output_path}")
     print(f"  Config:  {config['_resolved']['config_path']}")
     print()
 
     # Interactive mode selection (manual/double-click only)
-    if sys.stdout.isatty() and not name_search and not current_mode and not force_regen:
+    if (sys.stdout.isatty() and not name_search and not current_mode
+            and not force_regen and not btw_mode):
         print("  [1] Normal — update only modified chats (fast)")
         print("  [2] Force  — regenerate ALL chats from scratch (slow)")
+        print("  [3] BTW    — generate btw.html from /btw history (skip chats)")
         print()
         choice = input("  Select mode [1]: ").strip()
         if choice == "2":
             force_regen = True
             print()
             print("  Force mode: all chats will be regenerated.")
+        elif choice == "3":
+            btw_mode = True
+            print()
+            print("  BTW mode: generating btw.html from history.jsonl.")
         print()
+
+    # ---- BTW mode short-circuit: skip chat scan / organize / dashboard ----
+    if btw_mode:
+        print("-" * 52)
+        print("  Generating BTW view...")
+        btw_file = generate_btw_view(config)
+        print()
+        print("=" * 52)
+        if btw_file:
+            print(f"  BTW view ready: {btw_file}")
+            print("=" * 52)
+            print()
+            open_in_browser(btw_file)
+        else:
+            print("  No /btw queries found — nothing to generate.")
+            print("=" * 52)
+            print()
+        if sys.stdout.isatty() and os.name == 'nt':
+            _countdown_close(60)
+        return
 
     print("-" * 52)
     print("  Scanning chats...")
@@ -1645,6 +2286,8 @@ def main():
                     result, error = generate_chat_html(
                         jsonl_file, chats_path, agent_suffix,
                         f"../{index_filename}", sessions_meta,
+                        history_entries=history_entries,
+                        time_format=config["time_format"],
                     )
                     if result:
                         print(f"  UPDATED: {display_name}")
@@ -1657,6 +2300,8 @@ def main():
                 result, error = generate_chat_html(
                     jsonl_file, chats_path, agent_suffix,
                     f"../{index_filename}", sessions_meta,
+                    history_entries=history_entries,
+                    time_format=config["time_format"],
                 )
                 if result:
                     print(f"  NEW:     {display_name}")

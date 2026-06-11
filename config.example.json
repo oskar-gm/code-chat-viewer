@@ -10,6 +10,8 @@
     "index_filename": "CCV-Dashboard.html"
   },
 
+  "time_format": "12h",
+
   "agents": {
     "include": true,
     "min_size_kb": 3
