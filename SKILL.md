@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.2.0
+  version: 2.3.0
   keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
@@ -111,6 +111,7 @@ The manager supports CLI flags to open a specific chat instead of the dashboard:
 | `--current <path>` | `python scripts/manager.py --current /path/to/session.jsonl` | Open the chat for a specific JSONL file |
 | `--current` | `python scripts/manager.py --current` | Auto-detect current session from CWD |
 | `--force` | `python scripts/manager.py --force` | Regenerate ALL chats (ignores modification time check) |
+| `--btw` | `python scripts/manager.py --btw` | Generate `btw.html` aggregating all `/btw` queries (skips chat generation) |
 
 Flags can be combined: `python scripts/manager.py --force --name "my chat"`
 
@@ -141,6 +142,7 @@ Each project subdirectory contains:
 | `source.projects_path` | string | `~/.claude/projects` | Directory with Claude Code JSONL files |
 | `output.folder` | string | `~/Code Chat Viewer` | Root folder for output (dashboard + Chats/ subfolder) |
 | `output.index_filename` | string | `CCV-Dashboard.html` | Dashboard filename |
+| `time_format` | string | `12h` | Timestamp clock: `12h` (AM/PM) or `24h` |
 | `agents.include` | bool | `true` | Include agent sub-chat files |
 | `agents.min_size_kb` | int | `3` | Minimum agent file size to include (KB) |
 | `inactive_days` | int | `5` | Days without activity before organizing |
@@ -155,30 +157,40 @@ Each project subdirectory contains:
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
 - **Sortable table**: Click column headers to sort (default: last used, descending)
-- **Filter**: Filter by text across all columns
+- **Full-text search**: Filter and exclude search across complete chat names and UUIDs (not just visible truncated text)
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
-- **Optional columns**: UUID, Branch, Size, First Prompt (toggle with checkboxes)
+- **Permanent UUID column**: full session UUID with a one-click copy button (was an optional column in earlier versions)
+- **Optional columns**: Branch, Size, First Prompt, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
+- **Name tooltips**: Hover to see full chat name when truncated in the table
+- **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
 - **Direct links**: Icon to open each chat HTML file
 - **Enriched data**: Uses `sessions-index.json` and direct JSONL parsing for name, summary, message count, git branch
 - **State persistence**: Remembers sort order, filters, search text, exclude text, and visible columns via localStorage (5h TTL)
 - **Snapshot filtering**: Automatically excludes file-history-snapshot entries (Claude Code's undo system)
-- **Feedback button**: Highlighted in header, also in footer
+- **Header buttons**: Feedback (opens GitHub Issues) and Latest release (links to the newest release to check for updates); Feedback also in footer
+- **BTW Queries view**: `[3]` in the interactive menu or the `--btw` flag generates a standalone `btw.html` aggregating every `/btw` query from `~/.claude/history.jsonl`, grouped by chat, with Expand/Collapse all and a real-time filter
 
 ## Chat Page Features
 
 Each generated chat HTML includes:
 
 - **Chat title in header**: Displays the chat name next to "Code Chat Viewer" (resolved from custom title, session index, or first prompt)
+- **Chat UUID in header**: Full session UUID shown on the right side of the header. Selectable text plus a one-click SVG copy button (visual confirmation on copy)
 - **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
 - **Conversation filter**: Filter messages by text content
+- **Edit diff view**: `Tool: Edit` and `Tool: MultiEdit` blocks render `old_string` vs `new_string` side-by-side inside the tool-use box, with red/green color coding (Dark theme by default, Light theme toggle available)
+- **Expand/collapse all Edits & Writes**: One-click button in the search bar to open or close every Edit and Write block at once
+- **Write tool view**: Full-width collapsible block with blue accent, consistent with Edit's `new_string` side; the shared `Edits/Writes` toggle expands/collapses both at once
+- **`/btw` queries inline**: `/btw` questions from `~/.claude/history.jsonl` matching the session are injected inline as user-style messages (Claude cream styling), with a counter in the stats bar
+- **Full date in timestamps**: messages show the full `YYYY-MM-DD` date with configurable 12h (AM/PM, default) or 24h time (`time_format` in config)
 - **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, position counter, and keyboard shortcuts (N/P)
 - **Collapsible thinking blocks**: Collapsed by default with first-line preview; expand for full content
 - **Collapsible tool-use blocks**: Collapsed by default; expand for full untruncated content
-- **Smart message rendering**: Commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews)
-- **Color-coded highlights**: Blue for user, green for assistant, purple for compact, amber for user responses
+- **Smart message rendering**: Commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber Q&A with markdown previews), user rejections (`[REJECTED]` with feedback, coral/red), inline user comments (`[USER COMMENT]`, amber)
+- **Color-coded highlights**: Blue for user, green for assistant, purple for compact, amber for user responses/comments, red for rejections
 - **Smart scroll**: Centers short messages; pins long messages to top for readability
-- **Feedback button**: In header (highlighted) and footer
+- **Header buttons**: Feedback (opens GitHub Issues) and Latest release (check for updates), plus Back to Dashboard; Feedback also in footer
 - **Collapsible tool results**: Click to expand/collapse
 
 ## Chat Categories
@@ -233,4 +245,4 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 Author: Óscar González Martín
 Repository: https://github.com/oskar-gm/code-chat-viewer
 License: MIT
-Version: 2.2.0
+Version: 2.3.0

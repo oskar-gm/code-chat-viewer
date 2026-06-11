@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.2.0)
+[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.3.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.2.0:** [Download v2.2.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.2.0.zip) - Stable release
+**Version 2.3.0:** [Download v2.3.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.3.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -91,6 +91,7 @@ Configurable options:
 | Source path | `~/.claude/projects` | Where your JSONL chat files are |
 | Output folder | `~/Code Chat Viewer` | Where HTML files and dashboard are saved |
 | Dashboard filename | `CCV-Dashboard.html` | Name of the interactive index |
+| Time format | `12h` | Message/timestamp clock: `12h` (AM/PM) or `24h` |
 | Agent chats | Included (>3KB) | Include sub-agent conversations |
 | Agent min size | 3 KB | Minimum agent file size to include |
 | Shorts | Enabled | Separate small inactive chats into subfolder |
@@ -111,7 +112,9 @@ Configurable options:
 - Smart scroll: centers short messages, pins long messages to top
 - Dashboard state persistence (sort, filters, search, columns) via localStorage
 - Security-safe HTML rendering (escaped tool parameters)
-- Interactive dashboard with sortable table, search, exclude filter, and category filters
+- Interactive dashboard with sortable table, full-text search, exclude filter, and category filters
+- Full chat names visible on hover; complete names and UUIDs searchable even when truncated
+- UUID copy button in dashboard for quick session ID access
 - Batch generation with incremental updates (only regenerates changed chats)
 - Accurate timestamps and message counts read directly from JSONL files
 - Automatic filtering of snapshot-only entries (Claude Code's undo system)
@@ -119,15 +122,50 @@ Configurable options:
 - Dashboard link in every chat for easy navigation back
 - Embedded favicon and header icon (self-contained, no external files needed)
 - Auto-opens dashboard in browser after generation
-- Smart message rendering: commands, compact blocks, task notifications, user responses with Q&A and markdown previews
-- Color-coded navigation highlights per message type (blue/green/purple/amber)
+- Smart message rendering: commands, compact blocks, task notifications, user responses with Q&A and markdown previews, user rejections with feedback, inline user comments
+- Edit / MultiEdit diff view: old_string vs new_string side-by-side inside the tool-use box (dark/light theme toggle)
+- Write tool view: full-width collapsible block with blue accent, visually consistent with Edit's `new_string` side. Shared collapsible structure: the `Edits/Writes` toggle expands/collapses both at once
+- `/btw` queries injected inline in each chat (from `~/.claude/history.jsonl`): user-style messages with Claude cream styling and a subtle English disclaimer next to `[USER]` noting that Claude doesn't persist the answer. Counter in the stats bar
+- Full date in message timestamps (`YYYY-MM-DD`), with configurable 12h (AM/PM, default) or 24h time
+- Dashboard: `BTW` column (optional, off by default, sortable) and `UUID` column now permanent (was optional)
+- BTW Queries view (`[3]` in interactive menu or `--btw` flag): aggregates every `/btw` query you've issued from `~/.claude/history.jsonl` into a standalone `btw.html` next to the dashboard. Queries grouped by chat (collapsed by default), single `Expand all / Collapse all` toggle, real-time filter that auto-expands matching sessions
+- One-click expand/collapse for all Edit and Write blocks in the chat
+- Color-coded navigation highlights per message type (blue/green/purple/amber/red)
 - CLI flags: `--name`, `--current`, `--force` for targeted operations
 - Chat title displayed in HTML header (resolved from session metadata)
+- Chat UUID displayed on the right side of the header, with selectable text and a one-click SVG copy button
 - Interactive mode selection (normal/force) for manual execution
 - Full interactive setup with all options configurable
 - Scan progress indicator with summary
-- Built-in feedback button
+- Header buttons: Feedback (opens GitHub Issues) and Latest release (check for updates)
+- App version shown in the header
 - Windows-friendly: scripts pause on double-click (no instant close)
+
+### What's New in v2.3
+
+**Chat viewer:**
+- Edit / MultiEdit diff view: `old_string` and `new_string` rendered side-by-side inside the tool-use box, with red/green color coding. Dark theme by default, Light theme toggle in the search bar
+- Write tool view: full-width collapsible block with blue accent, visually consistent with Edit's `new_string` side. The shared `Edits/Writes` toggle expands/collapses both at once
+- One-click expand/collapse for all Edit and Write blocks
+- Chat UUID in header: full session UUID on the right side of the terminal header, with selectable text and a one-click SVG copy button (visual confirmation on copy)
+- `/btw` queries injected inline in each chat (from `~/.claude/history.jsonl`): user-style messages with Claude cream styling and a subtle disclaimer noting Claude doesn't persist the answer. Counter in the stats bar
+- User rejections (`[REJECTED]` with feedback, coral/red) and inline user comments (`[USER COMMENT]`, amber)
+- Color-coded navigation highlight for rejections (red), alongside user/assistant/compact/response
+- Full date in message timestamps (`YYYY-MM-DD`), with configurable 12h (AM/PM, default) or 24h time
+- More compact chat view: reduced padding, margins and font sizes throughout, with a refactored tool-result wrapper (same look, less vertical space)
+- Header buttons reworked (chat and dashboard): Feedback now opens GitHub Issues, and a new Latest release button links to the newest release to check for updates
+- App version shown in the header (chat and dashboard)
+
+**Dashboard:**
+- Full-text search across complete chat names and UUIDs (not just the visible truncated text); full names visible on hover
+- UUID copy button for quick session ID access, and `UUID` promoted to a permanent column
+- `BTW` column (optional, off by default, sortable): per-chat `/btw` count
+- BTW Queries view (`[3]` in the interactive menu or `--btw` flag): aggregates every `/btw` query from `~/.claude/history.jsonl` into a standalone `btw.html`, grouped by chat, with an Expand/Collapse all toggle and a real-time filter
+- Table layout rework: fixed column widths, flexible Name column with a sane minimum, horizontal scroll only when the visible columns don't fit, and overflow-proof cells (no more phantom blank space)
+
+**Fixes:**
+- Snapshot entries (`[Snapshot saved: ...]`) now honor the search filter — previously they stayed visible regardless of the query
+- Special user blocks (responses, rejections, comments) correctly filter as user messages in navigation
 
 ### What's New in v2.2
 
@@ -278,6 +316,8 @@ Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678
 - **Assistant messages**: Green (`#10893E`) with light green background (`#FAFFF8`)
 - **Commands**: Blue (`#0066CC`) with `[COMMAND]` label and deeper blue background (`#EBF2FF`)
 - **User responses**: Amber (`#D97706`) with Q&A layout, markdown previews, and `[USER RESPONSE]` label
+- **User rejections**: Coral/red (`#DC2626`) with `[REJECTED]` label and user feedback when provided (`#FFF1F2` background)
+- **User comments**: Amber (`#D97706`) with `[USER COMMENT]` label for inline comments on accepted actions
 - **Compact blocks**: Purple (`#8B5CF6`) collapsible blocks grouping summary + pre-compact output
 - **Task notifications**: Color-coded by status — green (completed), blue (in progress), gray (other)
 - **Tool results**: Orange (`#FF6B00`) with gray background (`#F8F8F8`)
@@ -386,6 +426,7 @@ Opciones configurables:
 | Ruta origen | `~/.claude/projects` | Dónde están tus archivos JSONL |
 | Carpeta de salida | `~/Code Chat Viewer` | Dónde se guardan los HTML y el panel |
 | Nombre del panel | `CCV-Dashboard.html` | Nombre del archivo índice interactivo |
+| Formato de hora | `12h` | Reloj de los timestamps: `12h` (AM/PM) o `24h` |
 | Chats de agentes | Incluidos (>3KB) | Incluir conversaciones de sub-agentes |
 | Tamaño mín. agente | 3 KB | Tamaño mínimo de agente para incluir |
 | Shorts | Activado | Separar chats pequeños inactivos en subcarpeta |
@@ -406,7 +447,9 @@ Opciones configurables:
 - Scroll inteligente: centra mensajes cortos, fija al inicio los largos
 - Persistencia de estado del dashboard (orden, filtros, búsqueda, columnas) vía localStorage
 - Renderizado HTML seguro (parámetros de herramientas escapados)
-- Panel interactivo con tabla ordenable, búsqueda, filtro de exclusión y filtros por categoría
+- Panel interactivo con tabla ordenable, búsqueda de texto completo, filtro de exclusión y filtros por categoría
+- Nombres de chats completos visibles en hover; nombres y UUIDs completos buscables aunque estén truncados
+- Botón de copiar UUID en el dashboard para acceso rápido al ID de sesión
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
 - Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
 - Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)
@@ -414,15 +457,50 @@ Opciones configurables:
 - Enlace al panel en cada chat para volver fácilmente
 - Favicon e icono de cabecera embebidos (autocontenido, sin archivos externos)
 - Apertura automática del panel en el navegador tras la generación
-- Renderizado inteligente de mensajes: comandos, bloques compact, notificaciones de tareas, respuestas de usuario con Q&A y previews de markdown
-- Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar)
+- Renderizado inteligente de mensajes: comandos, bloques compact, notificaciones de tareas, respuestas de usuario con Q&A y previews de markdown, rechazos de usuario con feedback, comentarios inline del usuario
+- Vista diff para Edit / MultiEdit: old_string vs new_string en dos columnas dentro del recuadro tool-use (toggle de tema claro/oscuro)
+- Vista del tool Write: bloque colapsable full-width con acento azul, visualmente coherente con el `new_string` de Edit. Estructura compartida: el toggle `Edits/Writes` expande/colapsa ambos a la vez
+- Consultas `/btw` inyectadas inline en cada chat (desde `~/.claude/history.jsonl`): pseudo-mensajes de usuario con estética crema Claude y disclaimer sutil en inglés junto a `[USER]` indicando que Claude no persiste la respuesta. Contador en la barra de estadísticas
+- Fecha completa en los timestamps de mensajes (`YYYY-MM-DD`), con hora configurable 12h (AM/PM, por defecto) o 24h
+- Dashboard: columna `BTW` (opcional, desmarcada por defecto, ordenable) y columna `UUID` ahora permanente (antes opcional)
+- Vista BTW Queries (`[3]` en el menú interactivo o flag `--btw`): agrega todas las consultas `/btw` que has hecho desde `~/.claude/history.jsonl` en un `btw.html` standalone junto al dashboard. Consultas agrupadas por chat (colapsadas por defecto), botón único `Expand all / Collapse all`, filtro en tiempo real que auto-expande sesiones con matches
+- Expandir/contraer todos los bloques Edit y Write con un clic
+- Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar/rojo)
 - Flags CLI: `--name`, `--current`, `--force` para operaciones dirigidas
 - Título del chat en el header del HTML (resuelto desde metadatos de sesión)
+- UUID del chat en el lado derecho del header, con texto seleccionable y botón SVG de copia con un clic
 - Selección de modo interactiva (normal/force) en ejecución manual
 - Setup interactivo completo con todas las opciones configurables
 - Indicador de progreso del escaneo con resumen
-- Botón de feedback integrado
+- Botones del header: Feedback (abre los Issues de GitHub) y Latest release (comprobar actualizaciones)
+- Versión de la app visible en el header
 - Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+
+### Novedades en v2.3
+
+**Visor de chats:**
+- Vista diff para Edit / MultiEdit: `old_string` y `new_string` en dos columnas dentro del recuadro tool-use, con codificación de color rojo/verde. Tema oscuro por defecto y toggle de tema claro en la barra de búsqueda
+- Vista del tool Write: bloque colapsable full-width con acento azul, coherente con el `new_string` de Edit. El toggle compartido `Edits/Writes` expande/colapsa ambos a la vez
+- Expandir/contraer todos los bloques Edit y Write con un clic
+- UUID del chat en el header: UUID completo de la sesión a la derecha del header del terminal, con texto seleccionable y botón SVG de copia con un clic (confirmación visual al copiar)
+- Consultas `/btw` inyectadas inline en cada chat (desde `~/.claude/history.jsonl`): pseudo-mensajes de usuario con estética crema Claude y un disclaimer sutil indicando que Claude no persiste la respuesta. Contador en la barra de estadísticas
+- Rechazos de usuario (`[REJECTED]` con feedback, coral/rojo) y comentarios inline (`[USER COMMENT]`, ámbar)
+- Resaltado de navegación por color para rechazos (rojo), junto a usuario/asistente/compact/respuesta
+- Fecha completa en los timestamps de mensajes (`YYYY-MM-DD`), con hora configurable 12h (AM/PM, por defecto) o 24h
+- Vista de chat más compacta: paddings, márgenes y tamaños de fuente reducidos en todo el visor, con el wrapper de tool-result refactorizado (mismo aspecto, menos espacio vertical)
+- Botones del header rehechos (chat y dashboard): Feedback ahora abre los Issues de GitHub, y un nuevo botón Latest release lleva a la última versión para comprobar actualizaciones
+- Versión de la app visible en el header (chat y dashboard)
+
+**Dashboard:**
+- Búsqueda de texto completo en nombres y UUIDs completos (no solo el texto truncado visible); nombres completos visibles en hover
+- Botón de copiar UUID para acceso rápido al ID de sesión, y columna `UUID` ahora permanente
+- Columna `BTW` (opcional, desmarcada por defecto, ordenable): conteo de `/btw` por chat
+- Vista BTW Queries (`[3]` en el menú interactivo o flag `--btw`): agrega todas las consultas `/btw` desde `~/.claude/history.jsonl` en un `btw.html` standalone, agrupadas por chat, con botón Expand/Collapse all y filtro en tiempo real
+- Layout de la tabla rehecho: anchos de columna fijos, columna Name flexible con mínimo razonable, scroll horizontal solo cuando las columnas visibles no caben y celdas a prueba de desbordes (adiós al espacio en blanco fantasma)
+
+**Correcciones:**
+- Las entradas snapshot (`[Snapshot saved: ...]`) ahora respetan el filtro de búsqueda — antes permanecían visibles independientemente de lo buscado
+- Bloques especiales de usuario (respuestas, rechazos, comentarios) se filtran correctamente como mensajes de usuario en navegación
 
 ### Novedades en v2.2
 
@@ -573,6 +651,8 @@ Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def01234
 - **Mensajes del asistente**: Verde (`#10893E`) con fondo verde claro (`#FAFFF8`)
 - **Comandos**: Azul (`#0066CC`) con etiqueta `[COMMAND]` y fondo azul más marcado (`#EBF2FF`)
 - **Respuestas del usuario**: Ámbar (`#D97706`) con layout Q&A, previews de markdown y etiqueta `[USER RESPONSE]`
+- **Rechazos del usuario**: Coral/rojo (`#DC2626`) con etiqueta `[REJECTED]` y feedback del usuario cuando se proporciona (fondo `#FFF1F2`)
+- **Comentarios del usuario**: Ámbar (`#D97706`) con etiqueta `[USER COMMENT]` para comentarios inline en acciones aceptadas
 - **Bloques compact**: Morado (`#8B5CF6`) colapsables agrupando summary + salida pre-compact
 - **Notificaciones de tareas**: Color por estado — verde (completada), azul (en progreso), gris (otro)
 - **Resultados de herramientas**: Naranja (`#FF6B00`) con fondo gris (`#F8F8F8`)
