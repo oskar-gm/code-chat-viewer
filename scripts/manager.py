@@ -1000,13 +1000,20 @@ def collect_chats_data(config: dict) -> list[dict]:
     return chats_data
 
 
+# Physical columns in the dashboard table — keep in sync with its <thead>:
+# sel + Name + Link + Project + Category + Created + Last Used + Msgs +
+# UUID + BTW + Branch + Size. Sub-rows span EXACTLY this number: a larger
+# colspan would declare ghost columns in fixed layout and crush Name.
+DASHBOARD_COLS = 12
+
+
 def _sub_row_html(kind: str, label: str, text: str, parent_uuid: str) -> str:
     """One collapsible sub-row (Recap / First prompt) below a dashboard row."""
     text = text.strip()
     preview = " ".join(text.split())[:220]
     return (
         f'\n<tr class="sub-row sub-{kind}" data-parent="{escape(parent_uuid)}" data-kind="{kind}">'
-        f'<td colspan="99"><details class="sub-details" data-parent="{escape(parent_uuid)}" data-kind="{kind}">'
+        f'<td colspan="{DASHBOARD_COLS}"><details class="sub-details" data-parent="{escape(parent_uuid)}" data-kind="{kind}">'
         f'<summary><span class="sub-label">{label}</span>'
         f'<span class="sub-preview">{escape(preview)}</span></summary>'
         f'<div class="sub-full">{escape(text)}</div></details></td></tr>'
@@ -1465,13 +1472,24 @@ def generate_index(config: dict) -> int:
             color: #333;
         }}
 
-        /* Sub-rows: Recap / First prompt (collapsible, toggled from Columns) */
+        /* Sub-rows: Recap / First prompt (collapsible, toggled from Columns).
+           Each type has its own accent color, mirrored in its toolbar toggle. */
         .sub-row {{ display: none; }}
         .sub-row.show {{ display: table-row; }}
         .sub-row td {{
-            background: #FAFAF7;
-            padding: 0 10px 5px 38px;
+            padding: 0 10px 5px 10px;
         }}
+        .sub-recap td {{ background: #F7F2FC; }}
+        .sub-prompt td {{ background: #F2F8FD; }}
+        .sub-recap .sub-label {{ color: #8B4FD6; }}
+        .sub-prompt .sub-label {{ color: #1E6FBF; }}
+        .sub-recap .sub-details summary::before {{ color: #8B4FD6; }}
+        .sub-prompt .sub-details summary::before {{ color: #1E6FBF; }}
+        .columns-toggle input[data-sub="recap"] {{ accent-color: #8B4FD6; }}
+        .columns-toggle input[data-sub="prompt"] {{ accent-color: #1E6FBF; }}
+        /* Toggle labels: normal by default, bold + accent color when checked */
+        .columns-toggle label:has(input[data-sub="recap"]:checked) {{ color: #8B4FD6; font-weight: 600; }}
+        .columns-toggle label:has(input[data-sub="prompt"]:checked) {{ color: #1E6FBF; font-weight: 600; }}
         .sub-details summary {{
             cursor: pointer;
             list-style: none;
@@ -1534,7 +1552,17 @@ def generate_index(config: dict) -> int:
         .tb-btn.danger {{ border-color: #D9534F; color: #C0392B; }}
         .tb-btn.danger:not(:disabled):hover {{ background: #FDECEA; }}
         .tb-btn:disabled {{ opacity: 0.45; cursor: default; }}
-        .sel-col input {{ cursor: pointer; }}
+        /* Compact equal-width toolbar buttons; Delete keeps its slot
+           reserved (visibility) so Select never shifts */
+        #deleteBtn, #selectModeBtn {{
+            width: 84px;
+            padding: 3px 6px;
+            text-align: center;
+        }}
+        #deleteBtn {{ visibility: hidden; margin-left: 14px; }}
+        #deleteBtn.shown {{ visibility: visible; }}
+        .sel-col input {{ cursor: pointer; width: 13px; height: 13px; }}
+        body.select-mode #chatsTable tbody tr:not(.sub-row) {{ cursor: pointer; }}
 
         .modal-overlay {{
             display: none;
@@ -1607,7 +1635,8 @@ def generate_index(config: dict) -> int:
             background: #FAFAFA;
             color: #333;
             box-sizing: border-box;
-            white-space: pre;
+            white-space: pre-wrap;
+            word-break: break-all;
         }}
         .modal-actions {{ display: flex; gap: 8px; align-items: center; margin-top: 10px; }}
         .modal-hint {{ flex: 1; color: #888; font-size: 11px; }}
@@ -1672,14 +1701,14 @@ def generate_index(config: dict) -> int:
             <label><input type="checkbox" data-col="size-col"> Size</label>
             <label><input type="checkbox" data-sub="recap"> Recap</label>
             <label><input type="checkbox" data-sub="prompt"> First prompt</label>
+            <button id="deleteBtn" class="tb-btn danger" disabled>Delete</button>
             <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
-            <button id="deleteBtn" class="tb-btn danger" disabled style="display:none">Delete</button>
         </div>
     </div>
 
     <div class="modal-overlay" id="deleteModal">
         <div class="modal-box">
-            <div class="modal-title">Delete <span id="delCount">0</span> chat(s)?</div>
+            <div class="modal-title">Delete <span id="delCount">0</span> chat(s)</div>
             <div class="modal-warning">This removes BOTH the generated HTML and the original Claude Code <code>.jsonl</code> session of each chat. With the permanent option this is <strong>IRRECOVERABLE</strong>.</div>
             <ul class="modal-list" id="delList"></ul>
             <div class="modal-tabs">
@@ -1701,7 +1730,7 @@ def generate_index(config: dict) -> int:
         <table id="chatsTable">
             <thead>
                 <tr>
-                    <th class="hidden-col sel-col" data-sort="none" data-width="28"><input type="checkbox" id="selAll" title="Select / unselect all visible"></th>
+                    <th class="hidden-col sel-col" data-sort="none" data-width="36"><input type="checkbox" id="selAll" title="Select / unselect all visible"></th>
                     <th data-sort="name">Name</th>
                     <th data-sort="none" data-width="40">Link</th>
                     <th data-sort="project" data-width="130">Project</th>
@@ -1885,13 +1914,28 @@ def generate_index(config: dict) -> int:
         selectBtn.addEventListener('click', () => {{
             selectMode = !selectMode;
             selectBtn.classList.toggle('active', selectMode);
-            deleteBtn.style.display = selectMode ? '' : 'none';
+            deleteBtn.classList.toggle('shown', selectMode);
+            document.body.classList.toggle('select-mode', selectMode);
             document.querySelectorAll('.sel-col').forEach(el => el.classList.toggle('hidden-col', !selectMode));
             if (!selectMode) {{
                 document.querySelectorAll('#chatsTable .sel-box').forEach(cb => {{ cb.checked = false; }});
             }}
             syncColumnWidths();
             refreshDeleteUI();
+        }});
+
+        /* In select mode, clicking anywhere on a row toggles its checkbox
+           (links, buttons, inputs and the sub-row details stay clickable). */
+        document.querySelectorAll('#chatsTable tbody tr:not(.sub-row)').forEach(tr => {{
+            tr.addEventListener('click', e => {{
+                if (!selectMode) return;
+                if (e.target.closest('a, button, input, details')) return;
+                const cb = tr.querySelector('.sel-box');
+                if (cb) {{
+                    cb.checked = !cb.checked;
+                    refreshDeleteUI();
+                }}
+            }});
         }});
 
         selAll.addEventListener('change', () => {{
@@ -1996,6 +2040,9 @@ def generate_index(config: dict) -> int:
         }});
         document.getElementById('delClose').addEventListener('click', () => delModal.classList.remove('open'));
         delModal.addEventListener('click', e => {{ if (e.target === delModal) delModal.classList.remove('open'); }});
+        document.addEventListener('keydown', e => {{
+            if (e.key === 'Escape') delModal.classList.remove('open');
+        }});
 
         /* Search and filter */
         document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
