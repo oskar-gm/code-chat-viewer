@@ -162,7 +162,7 @@ Environment variables (take precedence over `config.json`):
 
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
-- **Sortable table**: Click column headers to sort (default: last used, descending)
+- **Sortable table**: Click column headers to sort (default: last used, descending); every column is sortable except the link icon
 - **Full-text search**: Filter and exclude search across complete chat names and UUIDs (not just visible truncated text)
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)

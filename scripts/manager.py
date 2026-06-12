@@ -1005,7 +1005,7 @@ def generate_index(config: dict) -> int:
             else '<td class="hidden-col btw-col num-cell"></td>'
         )
 
-        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}">
+        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}">
 <td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
@@ -1316,6 +1316,7 @@ def generate_index(config: dict) -> int:
         }}
 
         th:hover {{ background: #E8E8E8; }}
+        th[data-sort="none"] {{ cursor: default; }}
 
         th.sorted-asc::after {{ content: " \\25B2"; font-size: 10px; }}
         th.sorted-desc::after {{ content: " \\25BC"; font-size: 10px; }}
@@ -1488,10 +1489,10 @@ def generate_index(config: dict) -> int:
                     <th data-sort="created" data-width="160">Created</th>
                     <th data-sort="modified" class="sorted-desc" data-width="160">Last Used</th>
                     <th data-sort="messages" data-width="64">Msgs</th>
-                    <th class="uuid-col" data-sort="none" data-width="140">UUID</th>
+                    <th class="uuid-col" data-sort="uuid" data-width="140">UUID</th>
                     <th class="hidden-col btw-col" data-sort="btw" data-width="64">BTW</th>
                     <th class="hidden-col branch-col" data-sort="branch" data-width="130">Branch</th>
-                    <th class="hidden-col size-col" data-sort="none" data-width="72">Size</th>
+                    <th class="hidden-col size-col" data-sort="size" data-width="72">Size</th>
                     <th class="hidden-col prompt-col" data-sort="none" data-width="200">First prompt</th>
                 </tr>
             </thead>
@@ -1573,10 +1574,13 @@ def generate_index(config: dict) -> int:
                 }} else if (col === 'btw') {{
                     aVal = parseInt(a.dataset.btw) || 0;
                     bVal = parseInt(b.dataset.btw) || 0;
+                }} else if (col === 'size') {{
+                    aVal = parseInt(a.dataset.size) || 0;
+                    bVal = parseInt(b.dataset.size) || 0;
                 }} else {{
-                    const colIndex = {{ name: 0, project: 2, category: 3, branch: 9 }}[col] || 0;
-                    aVal = a.cells[colIndex]?.textContent.toLowerCase() || '';
-                    bVal = b.cells[colIndex]?.textContent.toLowerCase() || '';
+                    const colIndex = {{ name: 0, project: 2, category: 3, uuid: 7, branch: 9 }}[col] || 0;
+                    aVal = (a.cells[colIndex]?.textContent || '').trim().toLowerCase();
+                    bVal = (b.cells[colIndex]?.textContent || '').trim().toLowerCase();
                 }}
                 if (typeof aVal === 'number') {{
                     return dir === 'asc' ? aVal - bVal : bVal - aVal;
