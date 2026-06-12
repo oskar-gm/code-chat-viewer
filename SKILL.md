@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.3.0
+  version: 2.4.0
   keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
@@ -253,4 +253,4 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 Author: Óscar González Martín
 Repository: https://github.com/oskar-gm/code-chat-viewer
 License: MIT
-Version: 2.3.0
+Version: 2.4.0

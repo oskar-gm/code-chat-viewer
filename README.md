@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.3.0)
+[![Version](https://img.shields.io/badge/version-2.4.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.4.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.3.0:** [Download v2.3.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.3.0.zip) - Stable release
+**Version 2.4.0:** [Download v2.4.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.4.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
