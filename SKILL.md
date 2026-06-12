@@ -167,7 +167,8 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
 - **Permanent UUID column**: full session UUID with a one-click copy button (was an optional column in earlier versions)
-- **Optional columns**: Branch, Size, First Prompt, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
+- **Optional columns**: Branch, Size, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
+- **Recap / First prompt sub-rows**: optional collapsible rows under each chat (toggles in Columns) showing the chat's last obtainable summary and the full first user message; searchable, sort-aware, persisted in localStorage
 - **Name tooltips**: Hover to see full chat name when truncated in the table
 - **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
 - **Direct links**: Icon to open each chat HTML file

@@ -719,9 +719,11 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
     result = {
         "messages": 0,
         "first_prompt": "",
+        "first_prompt_full": "",
         "cwd": "",
         "git_branch": "",
         "custom_title": "",
+        "recap": "",
     }
 
     try:
@@ -737,10 +739,37 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
                     result["custom_title"] = obj.get("customTitle", "")
                     continue
 
+                # Recap: keep the LAST obtainable summary while scanning.
+                # Sources: type=summary (auto-compaction), system away
+                # summaries, and user messages flagged isCompactSummary.
+                if obj.get("type") == "summary":
+                    s = obj.get("summary", "")
+                    if isinstance(s, str) and s.strip():
+                        result["recap"] = s.strip()
+                    continue
+
+                if obj.get("type") == "system":
+                    s = obj.get("awaySummary", "")
+                    if isinstance(s, str) and s.strip():
+                        result["recap"] = s.strip()
+                    continue
+
                 if obj.get("type") != "user":
                     continue
 
                 if obj.get("isCompactSummary"):
+                    msg_c = obj.get("message", {})
+                    c = msg_c.get("content", "") if isinstance(msg_c, dict) else ""
+                    txt = ""
+                    if isinstance(c, str):
+                        txt = c
+                    elif isinstance(c, list):
+                        for item in c:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                txt = item.get("text", "") or ""
+                                break
+                    if txt.strip():
+                        result["recap"] = txt.strip()
                     continue
 
                 msg = obj.get("message", {})
@@ -763,10 +792,13 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
 
                     if isinstance(content, str):
                         result["first_prompt"] = content[:100]
+                        result["first_prompt_full"] = content
                     elif isinstance(content, list):
                         for item in content:
                             if isinstance(item, dict) and item.get("type") == "text":
-                                result["first_prompt"] = (item.get("text", "") or "")[:100]
+                                t = item.get("text", "") or ""
+                                result["first_prompt"] = t[:100]
+                                result["first_prompt_full"] = t
                                 break
     except OSError:
         pass
@@ -837,12 +869,16 @@ def collect_chats_data(config: dict) -> list[dict]:
             if jsonl_file:
                 jsonl_meta = extract_jsonl_metadata(jsonl_file)
                 messages = jsonl_meta["messages"] if jsonl_meta["messages"] > 0 else meta.get("messageCount", 0)
+                recap = jsonl_meta["recap"]
+                first_prompt_full = jsonl_meta["first_prompt_full"] or first_prompt
 
                 # If sessions-index.json lacks customTitle, try JSONL
                 if not meta.get("customTitle") and jsonl_meta.get("custom_title"):
                     name = jsonl_meta["custom_title"]
             else:
                 messages = meta.get("messageCount", 0)
+                recap = ""
+                first_prompt_full = first_prompt
 
             created = meta.get("created", "")
             modified = meta.get("modified", "")
@@ -888,6 +924,8 @@ def collect_chats_data(config: dict) -> list[dict]:
                 messages = jsonl_meta["messages"]
                 branch = jsonl_meta["git_branch"]
                 first_prompt = jsonl_meta["first_prompt"]
+                first_prompt_full = jsonl_meta["first_prompt_full"]
+                recap = jsonl_meta["recap"]
 
                 # Use custom title from JSONL if available (set by /rename)
                 if jsonl_meta["custom_title"]:
@@ -905,6 +943,8 @@ def collect_chats_data(config: dict) -> list[dict]:
                 messages = 0
                 branch = ""
                 first_prompt = ""
+                first_prompt_full = ""
+                recap = ""
 
             summary = ""
 
@@ -946,6 +986,8 @@ def collect_chats_data(config: dict) -> list[dict]:
                 "messages": messages,
                 "branch": branch,
                 "first_prompt": first_prompt,
+                "first_prompt_full": first_prompt_full,
+                "recap": recap,
                 "summary": summary,
                 "html_link": html_link,
                 "html_size": html_size,
@@ -955,6 +997,19 @@ def collect_chats_data(config: dict) -> list[dict]:
 
     chats_data.sort(key=lambda x: x["modified_sort"], reverse=True)
     return chats_data
+
+
+def _sub_row_html(kind: str, label: str, text: str, parent_uuid: str) -> str:
+    """One collapsible sub-row (Recap / First prompt) below a dashboard row."""
+    text = text.strip()
+    preview = " ".join(text.split())[:220]
+    return (
+        f'\n<tr class="sub-row sub-{kind}" data-parent="{escape(parent_uuid)}" data-kind="{kind}">'
+        f'<td colspan="99"><details class="sub-details" data-parent="{escape(parent_uuid)}" data-kind="{kind}">'
+        f'<summary><span class="sub-label">{label}</span>'
+        f'<span class="sub-preview">{escape(preview)}</span></summary>'
+        f'<div class="sub-full">{escape(text)}</div></details></td></tr>'
+    )
 
 
 def generate_index(config: dict) -> int:
@@ -1005,7 +1060,15 @@ def generate_index(config: dict) -> int:
             else '<td class="hidden-col btw-col num-cell"></td>'
         )
 
-        rows_html += f'''<tr data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}">
+        sub_rows = ""
+        recap_txt = (chat.get("recap") or "").strip()
+        fp_txt = (chat.get("first_prompt_full") or chat.get("first_prompt") or "").strip()
+        if recap_txt:
+            sub_rows += _sub_row_html("recap", "Recap", recap_txt, uuid_full)
+        if fp_txt:
+            sub_rows += _sub_row_html("prompt", "First prompt", fp_txt, uuid_full)
+
+        rows_html += f'''<tr data-uuid="{escape(uuid_full)}" data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}">
 <td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
@@ -1017,8 +1080,7 @@ def generate_index(config: dict) -> int:
 {btw_cell}
 <td class="hidden-col branch-col">{escape(chat['branch'])}</td>
 <td class="hidden-col size-col">{chat['html_size'] // 1024}KB</td>
-<td class="hidden-col prompt-col" title="{escape(chat['first_prompt'])}">{escape(chat['first_prompt'][:40])}{"..." if len(chat['first_prompt']) > 40 else ""}</td>
-</tr>
+</tr>{sub_rows}
 '''
 
     # Build category stats line
@@ -1401,12 +1463,50 @@ def generate_index(config: dict) -> int:
             color: #333;
         }}
 
-        .prompt-col {{
+        /* Sub-rows: Recap / First prompt (collapsible, toggled from Columns) */
+        .sub-row {{ display: none; }}
+        .sub-row.show {{ display: table-row; }}
+        .sub-row td {{
+            background: #FAFAF7;
+            padding: 0 10px 5px 38px;
+        }}
+        .sub-details summary {{
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            padding: 4px 0 2px;
+            font-size: 11px;
+            color: #666;
+        }}
+        .sub-details summary::-webkit-details-marker {{ display: none; }}
+        .sub-details summary::before {{ content: "\\25B6"; font-size: 8px; color: #999; flex: none; }}
+        .sub-details[open] summary::before {{ content: "\\25BC"; }}
+        .sub-label {{
+            font-weight: 600;
+            font-size: 10px;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            color: #777;
+            flex: none;
+        }}
+        .sub-preview {{
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            font-size: 11px;
-            color: #666;
+            min-width: 0;
+            flex: 1;
+        }}
+        .sub-details[open] .sub-preview {{ display: none; }}
+        .sub-full {{
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            font-size: 11.5px;
+            color: #444;
+            padding: 2px 0 6px 16px;
+            max-height: 420px;
+            overflow-y: auto;
         }}
 
         .btw-col {{
@@ -1474,7 +1574,8 @@ def generate_index(config: dict) -> int:
             <label><input type="checkbox" data-col="btw-col"> BTW</label>
             <label><input type="checkbox" data-col="branch-col"> Branch</label>
             <label><input type="checkbox" data-col="size-col"> Size</label>
-            <label><input type="checkbox" data-col="prompt-col"> First prompt</label>
+            <label><input type="checkbox" data-sub="recap"> Recap</label>
+            <label><input type="checkbox" data-sub="prompt"> First prompt</label>
         </div>
     </div>
 
@@ -1493,7 +1594,6 @@ def generate_index(config: dict) -> int:
                     <th class="hidden-col btw-col" data-sort="btw" data-width="64">BTW</th>
                     <th class="hidden-col branch-col" data-sort="branch" data-width="130">Branch</th>
                     <th class="hidden-col size-col" data-sort="size" data-width="72">Size</th>
-                    <th class="hidden-col prompt-col" data-sort="none" data-width="200">First prompt</th>
                 </tr>
             </thead>
             <tbody>
@@ -1525,6 +1625,14 @@ def generate_index(config: dict) -> int:
             }});
             document.querySelectorAll('.columns-toggle input[data-col]').forEach(cb => {{
                 state.columns[cb.dataset.col] = cb.checked;
+            }});
+            state.subs = {{}};
+            document.querySelectorAll('.columns-toggle input[data-sub]').forEach(cb => {{
+                state.subs[cb.dataset.sub] = cb.checked;
+            }});
+            state.openSubs = {{}};
+            document.querySelectorAll('#chatsTable .sub-details[open]').forEach(d => {{
+                state.openSubs[d.dataset.parent + '|' + d.dataset.kind] = true;
             }});
             localStorage.setItem(STATE_KEY, JSON.stringify(state));
         }}
@@ -1562,7 +1670,7 @@ def generate_index(config: dict) -> int:
 
         function sortTable(col, dir) {{
             const tbody = document.querySelector('#chatsTable tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const rows = Array.from(tbody.querySelectorAll('tr:not(.sub-row)'));
             rows.sort((a, b) => {{
                 let aVal, bVal;
                 if (col === 'modified' || col === 'created') {{
@@ -1587,8 +1695,47 @@ def generate_index(config: dict) -> int:
                 }}
                 return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
             }});
-            rows.forEach(row => tbody.appendChild(row));
+            /* Sub-rows travel glued to their parent row */
+            rows.forEach(row => {{
+                tbody.appendChild(row);
+                (subRowsOf[row.dataset.uuid] || []).forEach(sr => tbody.appendChild(sr));
+            }});
         }}
+
+        /* Sub-rows (Recap / First prompt): index by parent, searchable text */
+        const subRowsOf = {{}};
+        const subTextOf = {{}};
+        const mainRowOf = {{}};
+        document.querySelectorAll('#chatsTable tbody tr:not(.sub-row)').forEach(r => {{
+            if (r.dataset.uuid) mainRowOf[r.dataset.uuid] = r;
+        }});
+        document.querySelectorAll('#chatsTable .sub-row').forEach(sr => {{
+            const p = sr.dataset.parent;
+            (subRowsOf[p] = subRowsOf[p] || []).push(sr);
+            subTextOf[p] = (subTextOf[p] || '') + ' ' + sr.textContent.toLowerCase();
+        }});
+
+        /* A sub-row is visible when its type toggle is on AND its parent row
+           passes the current filters. */
+        function syncSubRows() {{
+            const on = {{}};
+            document.querySelectorAll('.columns-toggle input[data-sub]').forEach(cb => {{
+                on[cb.dataset.sub] = cb.checked;
+            }});
+            document.querySelectorAll('#chatsTable .sub-row').forEach(sr => {{
+                const parent = mainRowOf[sr.dataset.parent];
+                const visible = !!parent && !parent.classList.contains('hidden-row') && !!on[sr.dataset.kind];
+                sr.classList.toggle('show', visible);
+            }});
+        }}
+
+        document.querySelectorAll('.columns-toggle input[data-sub]').forEach(cb => {{
+            cb.addEventListener('change', () => {{ syncSubRows(); saveState(); }});
+        }});
+
+        document.querySelectorAll('#chatsTable .sub-details').forEach(d => {{
+            d.addEventListener('toggle', saveState);
+        }});
 
         /* Search and filter */
         document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
@@ -1601,7 +1748,8 @@ def generate_index(config: dict) -> int:
             {filter_js_vars}
 
             document.querySelectorAll('#chatsTable tbody tr').forEach(row => {{
-                const text = row.textContent.toLowerCase();
+                if (row.classList.contains('sub-row')) return;
+                const text = row.textContent.toLowerCase() + (subTextOf[row.dataset.uuid] || '');
                 const category = row.querySelector('.category-cell')?.textContent || '';
                 const matchesSearch = !search || text.includes(search);
                 const matchesExclude = !exclude || !text.includes(exclude);
@@ -1609,6 +1757,7 @@ def generate_index(config: dict) -> int:
                     {filter_js_conditions};
                 row.classList.toggle('hidden-row', !(matchesSearch && matchesExclude && matchesFilter));
             }});
+            syncSubRows();
         }}
 
         /* Column sizing (fixed layout): visible columns get their data-width,
@@ -1658,6 +1807,15 @@ def generate_index(config: dict) -> int:
                         el.classList.toggle('hidden-col', !checked);
                     }});
                 }}
+            }});
+            Object.entries(saved.subs || {{}}).forEach(([kind, checked]) => {{
+                const cb = document.querySelector(`.columns-toggle input[data-sub="${{kind}}"]`);
+                if (cb) cb.checked = checked;
+            }});
+            Object.keys(saved.openSubs || {{}}).forEach(key => {{
+                const [p, kind] = key.split('|');
+                const d = document.querySelector(`.sub-details[data-parent="${{p}}"][data-kind="${{kind}}"]`);
+                if (d) d.open = true;
             }});
             if (saved.sort) {{
                 currentSort = saved.sort;
