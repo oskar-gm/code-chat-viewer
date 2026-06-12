@@ -991,6 +991,7 @@ def collect_chats_data(config: dict) -> list[dict]:
                 "summary": summary,
                 "html_link": html_link,
                 "html_size": html_size,
+                "jsonl_path": str(jsonl_file) if jsonl_file else "",
                 "btw_count": btw_counts.get(session_id_full, 0),
             }
         )
@@ -1068,7 +1069,8 @@ def generate_index(config: dict) -> int:
         if fp_txt:
             sub_rows += _sub_row_html("prompt", "First prompt", fp_txt, uuid_full)
 
-        rows_html += f'''<tr data-uuid="{escape(uuid_full)}" data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}">
+        rows_html += f'''<tr data-uuid="{escape(uuid_full)}" data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}" data-jsonl="{escape(chat.get('jsonl_path', ''))}" data-html="{escape(chat['html_link'])}">
+<td class="hidden-col sel-col"><input type="checkbox" class="sel-box"></td>
 <td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
@@ -1516,6 +1518,100 @@ def generate_index(config: dict) -> int:
             white-space: nowrap;
         }}
 
+        /* Select / Delete mode */
+        .tb-btn {{
+            font-family: inherit;
+            font-size: 11px;
+            padding: 4px 10px;
+            border: 1px solid #CCC;
+            border-radius: 3px;
+            background: #FFF;
+            color: #333;
+            cursor: pointer;
+        }}
+        .tb-btn:hover {{ background: #F0F0F0; }}
+        .tb-btn.active {{ background: #E8E8E8; border-color: #999; }}
+        .tb-btn.danger {{ border-color: #D9534F; color: #C0392B; }}
+        .tb-btn.danger:not(:disabled):hover {{ background: #FDECEA; }}
+        .tb-btn:disabled {{ opacity: 0.45; cursor: default; }}
+        .sel-col input {{ cursor: pointer; }}
+
+        .modal-overlay {{
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.45);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }}
+        .modal-overlay.open {{ display: flex; }}
+        .modal-box {{
+            background: #FFF;
+            border-radius: 6px;
+            width: min(760px, 92vw);
+            max-height: 86vh;
+            display: flex;
+            flex-direction: column;
+            padding: 18px 20px 14px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+            font-size: 12px;
+        }}
+        .modal-title {{ font-size: 15px; font-weight: 600; margin-bottom: 8px; }}
+        .modal-warning {{
+            background: #FDECEA;
+            border: 1px solid #F5C6CB;
+            color: #842029;
+            border-radius: 4px;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            line-height: 1.45;
+        }}
+        .modal-list {{
+            list-style: none;
+            margin: 0 0 10px;
+            padding: 6px 10px;
+            border: 1px solid #E0E0E0;
+            border-radius: 4px;
+            max-height: 150px;
+            overflow-y: auto;
+        }}
+        .modal-list li {{
+            padding: 2px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .modal-list li .del-date {{ color: #999; font-size: 11px; margin-left: 8px; }}
+        .modal-tabs {{ display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }}
+        .del-tab {{
+            font-family: inherit;
+            font-size: 11px;
+            padding: 4px 10px;
+            border: 1px solid #CCC;
+            border-radius: 3px;
+            background: #FFF;
+            cursor: pointer;
+        }}
+        .del-tab.active {{ background: #1E1E1E; color: #FFF; border-color: #1E1E1E; }}
+        .del-perm {{ margin-left: auto; display: flex; gap: 5px; align-items: center; font-size: 11px; color: #842029; cursor: pointer; }}
+        .modal-cmd {{
+            font-family: 'Cascadia Code', 'Consolas', monospace;
+            font-size: 11px;
+            width: 100%;
+            min-height: 92px;
+            resize: vertical;
+            border: 1px solid #DDD;
+            border-radius: 4px;
+            padding: 8px;
+            background: #FAFAFA;
+            color: #333;
+            box-sizing: border-box;
+            white-space: pre;
+        }}
+        .modal-actions {{ display: flex; gap: 8px; align-items: center; margin-top: 10px; }}
+        .modal-hint {{ flex: 1; color: #888; font-size: 11px; }}
+
         .footer {{
             background: #F3F3F3;
             border-top: 1px solid #E0E0E0;
@@ -1576,6 +1672,28 @@ def generate_index(config: dict) -> int:
             <label><input type="checkbox" data-col="size-col"> Size</label>
             <label><input type="checkbox" data-sub="recap"> Recap</label>
             <label><input type="checkbox" data-sub="prompt"> First prompt</label>
+            <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
+            <button id="deleteBtn" class="tb-btn danger" disabled style="display:none">Delete</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal-box">
+            <div class="modal-title">Delete <span id="delCount">0</span> chat(s)?</div>
+            <div class="modal-warning">This removes BOTH the generated HTML and the original Claude Code <code>.jsonl</code> session of each chat. With the permanent option this is <strong>IRRECOVERABLE</strong>.</div>
+            <ul class="modal-list" id="delList"></ul>
+            <div class="modal-tabs">
+                <button class="del-tab" data-tab="powershell">PowerShell (Windows)</button>
+                <button class="del-tab" data-tab="macos">macOS</button>
+                <button class="del-tab" data-tab="linux">Linux</button>
+                <label class="del-perm"><input type="checkbox" id="delPermanent"> Permanent (skip trash)</label>
+            </div>
+            <textarea class="modal-cmd" id="delCmd" readonly spellcheck="false"></textarea>
+            <div class="modal-actions">
+                <span class="modal-hint">Run the command in your terminal, then regenerate (Update Chats) to refresh the dashboard.</span>
+                <button class="tb-btn" id="delCopy">Copy command</button>
+                <button class="tb-btn" id="delClose">Close</button>
+            </div>
         </div>
     </div>
 
@@ -1583,6 +1701,7 @@ def generate_index(config: dict) -> int:
         <table id="chatsTable">
             <thead>
                 <tr>
+                    <th class="hidden-col sel-col" data-sort="none" data-width="28"><input type="checkbox" id="selAll" title="Select / unselect all visible"></th>
                     <th data-sort="name">Name</th>
                     <th data-sort="none" data-width="40">Link</th>
                     <th data-sort="project" data-width="130">Project</th>
@@ -1634,6 +1753,8 @@ def generate_index(config: dict) -> int:
             document.querySelectorAll('#chatsTable .sub-details[open]').forEach(d => {{
                 state.openSubs[d.dataset.parent + '|' + d.dataset.kind] = true;
             }});
+            state.delTab = delTab;
+            state.delMode = document.getElementById('delPermanent').checked;
             localStorage.setItem(STATE_KEY, JSON.stringify(state));
         }}
 
@@ -1686,7 +1807,7 @@ def generate_index(config: dict) -> int:
                     aVal = parseInt(a.dataset.size) || 0;
                     bVal = parseInt(b.dataset.size) || 0;
                 }} else {{
-                    const colIndex = {{ name: 0, project: 2, category: 3, uuid: 7, branch: 9 }}[col] || 0;
+                    const colIndex = {{ name: 1, project: 3, category: 4, uuid: 8, branch: 10 }}[col] || 1;
                     aVal = (a.cells[colIndex]?.textContent || '').trim().toLowerCase();
                     bVal = (b.cells[colIndex]?.textContent || '').trim().toLowerCase();
                 }}
@@ -1737,6 +1858,145 @@ def generate_index(config: dict) -> int:
             d.addEventListener('toggle', saveState);
         }});
 
+        /* ---- Select & Delete mode ---- */
+        let selectMode = false;
+        const selectBtn = document.getElementById('selectModeBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        const selAll = document.getElementById('selAll');
+        const delModal = document.getElementById('deleteModal');
+        let delTab = 'powershell';
+        let delFiles = [];
+
+        function selectedRows() {{
+            return Array.from(document.querySelectorAll('#chatsTable tbody .sel-box:checked'))
+                .map(cb => cb.closest('tr'));
+        }}
+
+        function refreshDeleteUI() {{
+            const n = selectedRows().length;
+            deleteBtn.textContent = n ? `Delete (${{n}})` : 'Delete';
+            deleteBtn.disabled = n === 0;
+            const visBoxes = Array.from(document.querySelectorAll('#chatsTable tbody tr:not(.sub-row):not(.hidden-row) .sel-box'));
+            const checkedVis = visBoxes.filter(cb => cb.checked).length;
+            selAll.checked = visBoxes.length > 0 && checkedVis === visBoxes.length;
+            selAll.indeterminate = checkedVis > 0 && checkedVis < visBoxes.length;
+        }}
+
+        selectBtn.addEventListener('click', () => {{
+            selectMode = !selectMode;
+            selectBtn.classList.toggle('active', selectMode);
+            deleteBtn.style.display = selectMode ? '' : 'none';
+            document.querySelectorAll('.sel-col').forEach(el => el.classList.toggle('hidden-col', !selectMode));
+            if (!selectMode) {{
+                document.querySelectorAll('#chatsTable .sel-box').forEach(cb => {{ cb.checked = false; }});
+            }}
+            syncColumnWidths();
+            refreshDeleteUI();
+        }});
+
+        selAll.addEventListener('change', () => {{
+            const target = selAll.checked;
+            document.querySelectorAll('#chatsTable tbody tr:not(.sub-row):not(.hidden-row) .sel-box').forEach(cb => {{ cb.checked = target; }});
+            refreshDeleteUI();
+        }});
+
+        document.querySelectorAll('#chatsTable .sel-box').forEach(cb => {{
+            cb.addEventListener('change', refreshDeleteUI);
+        }});
+
+        /* Path helpers — built without literal backslashes (template safety) */
+        const BS = String.fromCharCode(92);
+        const SQ = String.fromCharCode(39);
+
+        function dashboardDir() {{
+            let p = decodeURIComponent(location.pathname);
+            p = p.substring(0, p.lastIndexOf('/'));
+            if (p.charAt(0) === '/' && p.charAt(2) === ':') p = p.substring(1);
+            return p;
+        }}
+
+        function rowFiles(tr) {{
+            const dir = dashboardDir();
+            const win = dir.charAt(1) === ':';
+            const files = [];
+            if (tr.dataset.jsonl) files.push(tr.dataset.jsonl);
+            if (tr.dataset.html) {{
+                const h = tr.dataset.html;
+                files.push(win
+                    ? dir.split('/').join(BS) + BS + h.split('/').join(BS)
+                    : dir + '/' + h.split(BS).join('/'));
+            }}
+            return files;
+        }}
+
+        function psQuote(p) {{ return SQ + p.split(SQ).join(SQ + SQ) + SQ; }}
+        function shQuote(p) {{ return SQ + p.split(SQ).join(SQ + BS + SQ + SQ) + SQ; }}
+
+        function buildDelCmd() {{
+            const files = delFiles.flatMap(x => x.files);
+            const perm = document.getElementById('delPermanent').checked;
+            let cmd = '';
+            if (delTab === 'powershell') {{
+                const arr = files.map(psQuote).join(', ');
+                cmd = perm
+                    ? `Remove-Item -LiteralPath @(${{arr}}) -Force`
+                    : `Add-Type -AssemblyName Microsoft.VisualBasic; @(${{arr}}) | ForEach-Object {{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($_, 'OnlyErrorDialogs', 'SendToRecycleBin') }}`;
+            }} else if (delTab === 'macos') {{
+                cmd = perm
+                    ? `rm -f -- ${{files.map(shQuote).join(' ')}}`
+                    : `osascript -e ${{shQuote('tell application "Finder" to delete {{' + files.map(f => 'POSIX file "' + f.split('"').join(BS + '"') + '"').join(', ') + '}}')}}`;
+            }} else {{
+                cmd = perm
+                    ? `rm -f -- ${{files.map(shQuote).join(' ')}}`
+                    : `gio trash -- ${{files.map(shQuote).join(' ')}}`;
+            }}
+            document.getElementById('delCmd').value = cmd;
+        }}
+
+        deleteBtn.addEventListener('click', () => {{
+            const rows = selectedRows();
+            if (!rows.length) return;
+            delFiles = rows.map(tr => ({{
+                name: tr.querySelector('.name-cell')?.title || tr.dataset.uuid,
+                date: tr.querySelector('.date-cell')?.textContent || '',
+                files: rowFiles(tr)
+            }}));
+            document.getElementById('delCount').textContent = rows.length;
+            const list = document.getElementById('delList');
+            list.innerHTML = '';
+            delFiles.forEach(x => {{
+                const li = document.createElement('li');
+                li.textContent = x.name;
+                const sp = document.createElement('span');
+                sp.className = 'del-date';
+                sp.textContent = x.date;
+                li.appendChild(sp);
+                list.appendChild(li);
+            }});
+            buildDelCmd();
+            delModal.classList.add('open');
+        }});
+
+        document.querySelectorAll('.del-tab').forEach(b => {{
+            b.addEventListener('click', () => {{
+                delTab = b.dataset.tab;
+                document.querySelectorAll('.del-tab').forEach(x => x.classList.toggle('active', x === b));
+                buildDelCmd();
+                saveState();
+            }});
+        }});
+        document.getElementById('delPermanent').addEventListener('change', () => {{ buildDelCmd(); saveState(); }});
+        document.getElementById('delCopy').addEventListener('click', () => {{
+            const ta = document.getElementById('delCmd');
+            ta.select();
+            navigator.clipboard.writeText(ta.value).then(() => {{
+                document.getElementById('delCopy').textContent = 'Copied!';
+                setTimeout(() => {{ document.getElementById('delCopy').textContent = 'Copy command'; }}, 1500);
+            }});
+        }});
+        document.getElementById('delClose').addEventListener('click', () => delModal.classList.remove('open'));
+        delModal.addEventListener('click', e => {{ if (e.target === delModal) delModal.classList.remove('open'); }});
+
         /* Search and filter */
         document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
         document.getElementById('excludeInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
@@ -1758,6 +2018,7 @@ def generate_index(config: dict) -> int:
                 row.classList.toggle('hidden-row', !(matchesSearch && matchesExclude && matchesFilter));
             }});
             syncSubRows();
+            refreshDeleteUI();
         }}
 
         /* Column sizing (fixed layout): visible columns get their data-width,
@@ -1817,6 +2078,8 @@ def generate_index(config: dict) -> int:
                 const d = document.querySelector(`.sub-details[data-parent="${{p}}"][data-kind="${{kind}}"]`);
                 if (d) d.open = true;
             }});
+            if (saved.delTab) delTab = saved.delTab;
+            if (saved.delMode) document.getElementById('delPermanent').checked = true;
             if (saved.sort) {{
                 currentSort = saved.sort;
                 document.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
@@ -1826,6 +2089,7 @@ def generate_index(config: dict) -> int:
             }}
         }}
 
+        document.querySelectorAll('.del-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === delTab));
         syncColumnWidths();
         filterTable();
 

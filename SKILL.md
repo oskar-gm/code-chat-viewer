@@ -169,6 +169,7 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 - **Permanent UUID column**: full session UUID with a one-click copy button (was an optional column in earlier versions)
 - **Optional columns**: Branch, Size, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
 - **Recap / First prompt sub-rows**: optional collapsible rows under each chat (toggles in Columns) showing the chat's last obtainable summary and the full first user message; searchable, sort-aware, persisted in localStorage
+- **Select & delete**: a Select button enables per-row checkboxes (with a select-all-visible master) and a Delete button that opens a confirmation modal listing the affected chats; it generates a ready-to-copy command (PowerShell / macOS / Linux tabs) that removes each chat's HTML and original `.jsonl` — to trash by default, permanent via toggle. The dashboard cannot delete files itself (static HTML): the user runs the command in their terminal and regenerates
 - **Name tooltips**: Hover to see full chat name when truncated in the table
 - **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
 - **Direct links**: Icon to open each chat HTML file
