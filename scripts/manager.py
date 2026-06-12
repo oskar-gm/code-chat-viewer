@@ -176,7 +176,10 @@ def load_config() -> dict:
 
     # Resolve paths
     source_path = Path(config["source"]["projects_path"]).expanduser().resolve()
-    output_path = Path(config["output"]["folder"]).expanduser()
+    # Output folder precedence: CODE_CHAT_VIEWER_DIR env var > config.json.
+    # Resolved once here; the rest of the code only reads _resolved paths.
+    env_output = os.environ.get("CODE_CHAT_VIEWER_DIR", "").strip()
+    output_path = Path(env_output if env_output else config["output"]["folder"]).expanduser()
     if not output_path.is_absolute():
         output_path = (PROJECT_ROOT / output_path).resolve()
     else:
@@ -187,6 +190,7 @@ def load_config() -> dict:
         "output_path": output_path,
         "chats_path": output_path / "Chats",
         "config_path": config_path,
+        "output_from_env": bool(env_output),
     }
 
     # Validate source path
@@ -2197,8 +2201,9 @@ def main():
         history_path = Path.home() / ".claude" / "history.jsonl"
     history_entries = _collect_btw_history(history_path) if history_path.exists() else []
 
+    env_note = "  (from CODE_CHAT_VIEWER_DIR)" if config["_resolved"]["output_from_env"] else ""
     print(f"  Source:  {source_path}")
-    print(f"  Output:  {output_path}")
+    print(f"  Output:  {output_path}{env_note}")
     print(f"  Config:  {config['_resolved']['config_path']}")
     print()
 

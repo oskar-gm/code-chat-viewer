@@ -152,6 +152,12 @@ Each project subdirectory contains:
 | `archive.enabled` | bool | `true` | Separate old inactive chats |
 | `archive.folder` | string | `Archived` | Subfolder name for archived chats |
 
+Environment variables (take precedence over `config.json`):
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | `output.folder` | Alternative output directory for the dashboard and HTML files |
+
 ## Dashboard Features
 
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:

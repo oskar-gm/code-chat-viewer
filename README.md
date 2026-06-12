@@ -99,6 +99,12 @@ Configurable options:
 | Archive | Enabled | Separate old inactive chats into subfolder |
 | Inactive days | 5 | Days without activity before organizing |
 
+Environment variables (take precedence over `config.json`):
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | Output folder | Alternative output directory for the dashboard and HTML files |
+
 ### Features
 
 - Terminal-style aesthetics inspired by VS Code
@@ -433,6 +439,12 @@ Opciones configurables:
 | Tamaño máx. short | 40 KB | Tamaño máximo de HTML para clasificar como short |
 | Archivo | Activado | Separar chats inactivos antiguos en subcarpeta |
 | Días de inactividad | 5 | Días sin actividad antes de organizar |
+
+Variables de entorno (tienen precedencia sobre `config.json`):
+
+| Variable | Sobrescribe | Descripción |
+|----------|-------------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | Carpeta de salida | Directorio de salida alternativo para el panel y los HTML |
 
 ### Características
 
