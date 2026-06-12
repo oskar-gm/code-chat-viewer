@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.3.0
+  version: 2.4.0
   keywords: claude-code, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
@@ -152,16 +152,24 @@ Each project subdirectory contains:
 | `archive.enabled` | bool | `true` | Separate old inactive chats |
 | `archive.folder` | string | `Archived` | Subfolder name for archived chats |
 
+Environment variables (take precedence over `config.json`):
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | `output.folder` | Alternative output directory for the dashboard and HTML files |
+
 ## Dashboard Features
 
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
-- **Sortable table**: Click column headers to sort (default: last used, descending)
+- **Sortable table**: Click column headers to sort (default: last used, descending); every column is sortable except the link icon
 - **Full-text search**: Filter and exclude search across complete chat names and UUIDs (not just visible truncated text)
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
 - **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
 - **Permanent UUID column**: full session UUID with a one-click copy button (was an optional column in earlier versions)
-- **Optional columns**: Branch, Size, First Prompt, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
+- **Optional columns**: Branch, Size, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
+- **Recap / First prompt sub-rows**: optional collapsible rows under each chat (toggles in Columns) showing the chat's last obtainable summary and the full first user message; searchable, sort-aware, persisted in localStorage
+- **Select & delete**: a Select button enables per-row checkboxes (with a select-all-visible master) and a Delete button that opens a confirmation modal listing the affected chats; it generates a ready-to-copy command (PowerShell / macOS / Linux tabs) that removes each chat's HTML and original `.jsonl` — to trash by default, permanent via toggle. The dashboard cannot delete files itself (static HTML): the user runs the command in their terminal and regenerates
 - **Name tooltips**: Hover to see full chat name when truncated in the table
 - **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
 - **Direct links**: Icon to open each chat HTML file
@@ -245,4 +253,4 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 Author: Óscar González Martín
 Repository: https://github.com/oskar-gm/code-chat-viewer
 License: MIT
-Version: 2.3.0
+Version: 2.4.0

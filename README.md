@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.3.0)
+[![Version](https://img.shields.io/badge/version-2.4.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.4.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -17,7 +17,7 @@
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
 
-**Version 2.3.0:** [Download v2.3.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.3.0.zip) - Stable release
+**Version 2.4.0:** [Download v2.4.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.4.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -99,6 +99,12 @@ Configurable options:
 | Archive | Enabled | Separate old inactive chats into subfolder |
 | Inactive days | 5 | Days without activity before organizing |
 
+Environment variables (take precedence over `config.json`):
+
+| Variable | Overrides | Description |
+|----------|-----------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | Output folder | Alternative output directory for the dashboard and HTML files |
+
 ### Features
 
 - Terminal-style aesthetics inspired by VS Code
@@ -115,6 +121,9 @@ Configurable options:
 - Interactive dashboard with sortable table, full-text search, exclude filter, and category filters
 - Full chat names visible on hover; complete names and UUIDs searchable even when truncated
 - UUID copy button in dashboard for quick session ID access
+- Recap and First prompt collapsible sub-rows in the dashboard (optional, searchable, sort-aware)
+- Select mode to delete chats from the dashboard: generates a ready-to-copy trash/permanent command for your OS
+- Output folder override via the `CODE_CHAT_VIEWER_DIR` environment variable
 - Batch generation with incremental updates (only regenerates changed chats)
 - Accurate timestamps and message counts read directly from JSONL files
 - Automatic filtering of snapshot-only entries (Claude Code's undo system)
@@ -140,6 +149,16 @@ Configurable options:
 - Header buttons: Feedback (opens GitHub Issues) and Latest release (check for updates)
 - App version shown in the header
 - Windows-friendly: scripts pause on double-click (no instant close)
+
+### What's New in v2.4
+
+**Dashboard:**
+- Recap + First prompt as collapsible sub-rows under each chat (off by default, toggles in Columns): the chat's last obtainable summary and the full first user message; searchable, glued to their row when sorting, persisted in localStorage — inspired by @marccane (#2)
+- Select & delete: a Select mode with per-row checkboxes and a select-all-visible master; the Delete modal lists the affected chats and generates a ready-to-copy command (PowerShell / macOS / Linux tabs) that removes each chat's HTML and original `.jsonl` — to trash by default, permanent via toggle — inspired by @marccane (#2)
+- Universal column sorting: every column is sortable except the link icon (Size by real byte size, UUID alphabetical)
+
+**General:**
+- `CODE_CHAT_VIEWER_DIR` environment variable: alternative output folder, takes precedence over `config.json` — co-authored with @marccane (#2)
 
 ### What's New in v2.3
 
@@ -434,6 +453,12 @@ Opciones configurables:
 | Archivo | Activado | Separar chats inactivos antiguos en subcarpeta |
 | Días de inactividad | 5 | Días sin actividad antes de organizar |
 
+Variables de entorno (tienen precedencia sobre `config.json`):
+
+| Variable | Sobrescribe | Descripción |
+|----------|-------------|-------------|
+| `CODE_CHAT_VIEWER_DIR` | Carpeta de salida | Directorio de salida alternativo para el panel y los HTML |
+
 ### Características
 
 - Estética estilo terminal inspirada en VS Code
@@ -450,6 +475,9 @@ Opciones configurables:
 - Panel interactivo con tabla ordenable, búsqueda de texto completo, filtro de exclusión y filtros por categoría
 - Nombres de chats completos visibles en hover; nombres y UUIDs completos buscables aunque estén truncados
 - Botón de copiar UUID en el dashboard para acceso rápido al ID de sesión
+- Sub-filas desplegables Recap y First prompt en el dashboard (opcionales, con búsqueda y orden integrados)
+- Modo selección para borrar chats desde el dashboard: genera un comando listo para copiar (papelera/permanente) según tu sistema
+- Carpeta de salida configurable con la variable de entorno `CODE_CHAT_VIEWER_DIR`
 - Generación por lotes con actualizaciones incrementales (solo regenera chats modificados)
 - Timestamps y conteos de mensajes precisos leídos directamente de archivos JSONL
 - Filtrado automático de entradas snapshot-only (sistema de undo de Claude Code)
@@ -475,6 +503,16 @@ Opciones configurables:
 - Botones del header: Feedback (abre los Issues de GitHub) y Latest release (comprobar actualizaciones)
 - Versión de la app visible en el header
 - Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+
+### Novedades en v2.4
+
+**Dashboard:**
+- Recap + First prompt como sub-filas desplegables bajo cada chat (desactivadas por defecto, toggles en Columns): el último resumen obtenible del chat y el primer mensaje íntegro; con búsqueda, pegadas a su fila al ordenar y persistidas en localStorage — inspirado en @marccane (#2)
+- Selección y borrado: modo Select con checkboxes por fila y maestro marcar/desmarcar visibles; el modal Delete lista los chats afectados y genera un comando listo para copiar (pestañas PowerShell / macOS / Linux) que elimina el HTML y el `.jsonl` original de cada chat — a papelera por defecto, permanente con el toggle — inspirado en @marccane (#2)
+- Ordenación universal de columnas: todas ordenables salvo el icono de enlace (Size por tamaño real en bytes, UUID alfabética)
+
+**General:**
+- Variable de entorno `CODE_CHAT_VIEWER_DIR`: carpeta de salida alternativa, con precedencia sobre `config.json` — coautoría con @marccane (#2)
 
 ### Novedades en v2.3
 
