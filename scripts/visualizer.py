@@ -102,6 +102,32 @@ APP_VERSION = "2.4.0"
 # Set by generate_html() from config; "12h" is the default.
 TIME_FORMAT = "12h"
 
+# ====== KNOWN JSONL SCHEMA ======
+# What CCV recognizes today. Single source of truth shared by two tools:
+#   - the audit report (manager.py) flags anything OUTSIDE these sets as a
+#     possible format change, so a genuinely new Claude Code type gets noticed;
+#   - the coverage tests check the renderers handle everything INSIDE them.
+# When a new type appears, confirm what it is and add it to the right set.
+
+# Top-level types CCV renders as conversation messages.
+KNOWN_MESSAGE_TYPES = frozenset({
+    'user', 'assistant', 'summary', 'file-history-snapshot',
+})
+
+# Session metadata/state entries Claude Code writes to the JSONL that are NOT
+# conversation messages — CCV ignores them on purpose. Known and expected, so
+# the audit must not flag them as format changes.
+KNOWN_METADATA_TYPES = frozenset({
+    'system', 'custom-title', 'attachment', 'agent-name', 'last-prompt',
+    'permission-mode', 'mode', 'ai-title', 'queue-operation', 'bridge-session',
+})
+
+# Content-item types inside a message's content list. 'image' is part of the
+# format but CCV has no dedicated renderer for it yet (shown as a generic block).
+KNOWN_CONTENT_TYPES = frozenset({
+    'text', 'thinking', 'tool_use', 'tool_result', 'image',
+})
+
 
 def _time_pattern() -> str:
     """strftime pattern for the time portion, per TIME_FORMAT."""
@@ -116,7 +142,7 @@ def format_timestamp(timestamp_str: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).astimezone()
         return dt.strftime(f'%Y-%m-%d {_time_pattern()}')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return ""
 
 
@@ -313,6 +339,32 @@ def _get_tool_result_text(item: dict) -> str:
             if isinstance(sub, dict) and sub.get('type') == 'text':
                 return sub.get('text', '')
     return ''
+
+
+def _coerce_json_list(value):
+    """Return a list from a value that may already be a list or a JSON string.
+
+    Some clients serialize structured tool inputs (e.g. AskUserQuestion's
+    `questions`, MultiEdit's `edits`) as a JSON-encoded string instead of a
+    real array. Returns [] for anything that isn't a list or a string that
+    decodes to one, so callers can iterate without exploding.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    return value if isinstance(value, list) else []
+
+
+def _coerce_json_dict(value):
+    """Return a dict from a value that may already be a dict or a JSON string."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 # ====== SPECIAL MESSAGE RENDERING FUNCTIONS ======
@@ -587,16 +639,18 @@ def format_tool_result_content(tool_result_data: Dict) -> str:
 
 def render_ask_tool_use(tool_id: str, tool_input: dict) -> str:
     """Render AskUserQuestion tool_use with structured questions and markdown previews."""
-    questions = tool_input.get('questions', [])
+    questions = _coerce_json_list(tool_input.get('questions', []))
     if not questions:
         return None
 
     parts = []
     for q in questions:
+        if not isinstance(q, dict):
+            continue
         question_text = q.get('question', '')
         header_text = q.get('header', '')
         multi = q.get('multiSelect', False)
-        options = q.get('options', [])
+        options = _coerce_json_list(q.get('options', []))
 
         q_html = f'<div style="font-weight:700; color:#E8E8E8; margin-bottom:4px;">{escape(question_text)}</div>'
         if header_text:
@@ -604,6 +658,8 @@ def render_ask_tool_use(tool_id: str, tool_input: dict) -> str:
 
         opts_html = []
         for opt in options:
+            if not isinstance(opt, dict):
+                continue
             label = opt.get('label', '')
             desc = opt.get('description', '')
             md = opt.get('markdown', '')
@@ -728,7 +784,7 @@ def render_edit_tool_use(tool_id: str, tool_name: str, tool_input: dict) -> str:
     file_path = tool_input.get('file_path', '')
 
     if tool_name == 'MultiEdit':
-        edits = tool_input.get('edits', []) or []
+        edits = _coerce_json_list(tool_input.get('edits', []))
     else:  # Edit (or Write fallback uses main path)
         edits = [{
             'old_string': tool_input.get('old_string', ''),
@@ -750,6 +806,8 @@ def render_edit_tool_use(tool_id: str, tool_name: str, tool_input: dict) -> str:
     total = len(edits)
     diff_blocks = []
     for idx, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            continue
         old_s = edit.get('old_string', '') or ''
         new_s = edit.get('new_string', '') or ''
         replace_all = bool(edit.get('replace_all', False))
@@ -813,7 +871,7 @@ def format_content_item(item) -> str:
     if item_type == 'tool_use':
         tool_name = item.get('name', 'unknown')
         tool_id = item.get('id', '')
-        tool_input = item.get('input', {})
+        tool_input = _coerce_json_dict(item.get('input', {}))
 
         # Special rendering for AskUserQuestion with structured Q&A
         if tool_name == 'AskUserQuestion' and 'questions' in tool_input:

@@ -215,6 +215,9 @@ from visualizer import (  # noqa: E402
     generate_output_filename,
     ICON_BASE64,
     ICON_FAVICON_BASE64,
+    KNOWN_MESSAGE_TYPES,
+    KNOWN_METADATA_TYPES,
+    KNOWN_CONTENT_TYPES,
 )
 
 # ---------------------------------------------------------------------------
@@ -2621,6 +2624,365 @@ def generate_btw_view(config: dict) -> Path | None:
     return output_file
 
 
+def _audit_object(obj, chat_name: str, findings: dict):
+    """Inspect one JSONL object and accumulate anomalies into `findings`."""
+    if not isinstance(obj, dict):
+        return
+
+    mtype = obj.get("type", "")
+    findings["message_type_counts"][mtype] = findings["message_type_counts"].get(mtype, 0) + 1
+    if mtype and mtype not in KNOWN_MESSAGE_TYPES and mtype not in KNOWN_METADATA_TYPES:
+        slot = findings["unknown_message_types"].setdefault(mtype, {"count": 0, "chats": set()})
+        slot["count"] += 1
+        slot["chats"].add(chat_name)
+
+    message = obj.get("message")
+    if not isinstance(message, dict):
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        ctype = item.get("type", "")
+        findings["content_type_counts"][ctype] = findings["content_type_counts"].get(ctype, 0) + 1
+        if ctype and ctype not in KNOWN_CONTENT_TYPES:
+            slot = findings["unknown_content_types"].setdefault(ctype, {"count": 0, "chats": set()})
+            slot["count"] += 1
+            slot["chats"].add(chat_name)
+        if ctype == "thinking" and not (item.get("thinking") or "").strip():
+            findings["empty_thinking"]["count"] += 1
+            findings["empty_thinking"]["chats"].add(chat_name)
+        if ctype == "text" and not (item.get("text") or "").strip():
+            findings["empty_text"]["count"] += 1
+            findings["empty_text"]["chats"].add(chat_name)
+        if ctype == "tool_use":
+            tname = item.get("name", "")
+            if tname:
+                findings["tool_names"][tname] = findings["tool_names"].get(tname, 0) + 1
+
+
+def audit_chats(config: dict, scan_count="50") -> dict:
+    """Scan the most recent JSONL files for format anomalies (read-only).
+
+    `scan_count` is an int-like (the N most recent by mtime) or "all". Returns a
+    structured findings dict consumed by generate_audit_view. Never writes.
+    """
+    source_path = config["_resolved"]["source_path"]
+
+    files = []
+    for project_dir in source_path.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            files.append(jsonl_file)
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    scan_all = str(scan_count).lower() == "all"
+    if not scan_all:
+        try:
+            n = int(scan_count)
+        except (TypeError, ValueError):
+            n = 50
+        files = files[: max(0, n)]
+
+    findings = {
+        "scanned": 0,
+        "scan_all": scan_all,
+        "unknown_message_types": {},
+        "unknown_content_types": {},
+        "empty_thinking": {"count": 0, "chats": set()},
+        "empty_text": {"count": 0, "chats": set()},
+        "parse_errors": [],
+        "message_type_counts": {},
+        "content_type_counts": {},
+        "tool_names": {},
+    }
+
+    for jsonl_file in files:
+        findings["scanned"] += 1
+        chat_name = jsonl_file.name
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        findings["parse_errors"].append({"chat": chat_name, "line": line_num})
+                        continue
+                    _audit_object(obj, chat_name, findings)
+        except OSError:
+            continue
+
+    return findings
+
+
+def _audit_has_findings(findings: dict) -> bool:
+    """True if there is any actionable anomaly (excludes the plain summary)."""
+    return bool(
+        findings["unknown_message_types"]
+        or findings["unknown_content_types"]
+        or findings["empty_thinking"]["count"]
+        or findings["empty_text"]["count"]
+        or findings["parse_errors"]
+    )
+
+
+def _audit_section(css: str, title: str, intro: str, items_html: str) -> str:
+    return (
+        f'<section class="audit-section audit-{css}">'
+        f'<h2 class="audit-title">{title}</h2>'
+        f'<p class="audit-intro">{intro}</p>'
+        f'<ul class="audit-list">{items_html}</ul>'
+        f'</section>'
+    )
+
+
+def generate_audit_view(config: dict, scan_count="50"):
+    """Generate an HTML format-audit report next to the dashboard.
+
+    Returns (path, findings). The report is always written (even with zero
+    findings, to confirm "all clear"). Read-only over the JSONL files.
+    """
+    output_path = config["_resolved"]["output_path"]
+    index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
+
+    findings = audit_chats(config, scan_count)
+    scope = "all chats" if findings["scan_all"] else f"{findings['scanned']} most recent chats"
+
+    sections = []
+
+    # 1. Possible format changes
+    fmt_rows = []
+    for t, d in sorted(findings["unknown_message_types"].items(), key=lambda kv: -kv[1]["count"]):
+        fmt_rows.append(("message type", t, d["count"], len(d["chats"])))
+    for t, d in sorted(findings["unknown_content_types"].items(), key=lambda kv: -kv[1]["count"]):
+        fmt_rows.append(("content type", t, d["count"], len(d["chats"])))
+    if fmt_rows:
+        items = "".join(
+            f'<li><code>{escape(t)}</code> <span class="audit-kind">({kind})</span> — '
+            f'{count} occurrence(s) across {chats} chat(s). CCV shows it as a generic block.</li>'
+            for kind, t, count, chats in fmt_rows
+        )
+        sections.append(_audit_section(
+            "format", "🆕 Possible format changes",
+            "Types not in CCV&#39;s known schema. This may be something new introduced by "
+            "Claude Code. If any should render in a specific way, please report it.", items))
+
+    # 2. Possibly dropped content
+    drop_items = []
+    if findings["empty_thinking"]["count"]:
+        drop_items.append(
+            f'<li><code>thinking</code> — {findings["empty_thinking"]["count"]} empty block(s) '
+            f'across {len(findings["empty_thinking"]["chats"])} chat(s).</li>')
+    if findings["empty_text"]["count"]:
+        drop_items.append(
+            f'<li><code>text</code> — {findings["empty_text"]["count"]} empty block(s) '
+            f'across {len(findings["empty_text"]["chats"])} chat(s).</li>')
+    if drop_items:
+        sections.append(_audit_section(
+            "dropped", "⚠️ Possibly dropped content",
+            "Empty blocks that normally carry text. These may be content the Claude Code "
+            "client did not persist (a known pattern) — not a CCV fault. The text itself is "
+            "not in the JSONL, so it cannot be recovered.", "".join(drop_items)))
+
+    # 3. Unexpected errors
+    if findings["parse_errors"]:
+        shown = findings["parse_errors"][:50]
+        err_items = "".join(
+            f'<li><code>{escape(e["chat"])}</code> — line {e["line"]} is not valid JSON.</li>'
+            for e in shown)
+        extra = ""
+        if len(findings["parse_errors"]) > len(shown):
+            extra = f'<li>… and {len(findings["parse_errors"]) - len(shown)} more.</li>'
+        sections.append(_audit_section(
+            "error", "🔴 Unexpected errors",
+            "Lines that could not be parsed as JSON. Possible corruption or truncation of the "
+            "source file.", err_items + extra))
+
+    # 4. Summary (always present)
+    def _counts_list(counts):
+        return "".join(
+            f'<li><code>{escape(str(k) or "(none)")}</code> — {v}</li>'
+            for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    summary_items = (
+        f'<li><strong>Scope:</strong> {escape(scope)}</li>'
+        f'<li><strong>Message types seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["message_type_counts"])}</ul>'
+        f'<li><strong>Content types seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["content_type_counts"])}</ul>'
+        f'<li><strong>Tools seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["tool_names"]) or "<li>(none)</li>"}</ul>'
+    )
+    sections.append(_audit_section("summary", "📊 Summary", "What was scanned and seen.", summary_items))
+
+    has_findings = _audit_has_findings(findings)
+    copy_btn = ('<span class="audit-arrow" aria-hidden="true">&rarr;</span>'
+                '<button type="button" class="audit-copy" onclick="copyAuditReport()">'
+                'Copy report</button>')
+    if has_findings:
+        banner = (
+            '<div class="audit-banner audit-banner-warn">'
+            '<span class="audit-banner-text">Some items were flagged below. If you think any of '
+            'them should be fixed, <a href="https://github.com/oskar-gm/code-chat-viewer/issues" '
+            'target="_blank" rel="noopener">open an issue on GitHub</a>.</span>'
+            f'{copy_btn}</div>'
+        )
+    else:
+        banner = (
+            '<div class="audit-banner audit-banner-ok">'
+            '<span class="audit-banner-text">All clear — everything scanned matches CCV&#39;s known '
+            'schema, with no empty blocks or parse errors.</span>'
+            f'{copy_btn}</div>'
+        )
+
+    sections_block = "\n".join(sections)
+    gen_time = _fmt_dt(datetime.now(), config["time_format"])
+
+    # Plain-text version of the report, for the Copy button (e.g. to paste in an issue).
+    plain_lines = [
+        "Code Chat Viewer - Format Audit",
+        f"Scope: {scope}",
+        f"Generated: {gen_time}",
+        "",
+    ]
+    if fmt_rows:
+        plain_lines.append("== Possible format changes ==")
+        plain_lines += [f"- {t} ({kind}): {count} occurrence(s) across {chats} chat(s)"
+                        for kind, t, count, chats in fmt_rows]
+        plain_lines.append("")
+    if findings["empty_thinking"]["count"] or findings["empty_text"]["count"]:
+        plain_lines.append("== Possibly dropped content ==")
+        if findings["empty_thinking"]["count"]:
+            plain_lines.append(f"- thinking: {findings['empty_thinking']['count']} empty block(s) "
+                               f"across {len(findings['empty_thinking']['chats'])} chat(s)")
+        if findings["empty_text"]["count"]:
+            plain_lines.append(f"- text: {findings['empty_text']['count']} empty block(s) "
+                               f"across {len(findings['empty_text']['chats'])} chat(s)")
+        plain_lines.append("")
+    if findings["parse_errors"]:
+        plain_lines.append("== Unexpected errors ==")
+        plain_lines += [f"- {e['chat']}: line {e['line']} is not valid JSON"
+                        for e in findings["parse_errors"][:50]]
+        plain_lines.append("")
+    plain_lines.append("== Summary ==")
+    plain_lines.append("Message types seen: " + ", ".join(
+        f"{k or '(none)'}={v}" for k, v in sorted(findings["message_type_counts"].items(), key=lambda kv: -kv[1])))
+    plain_lines.append("Content types seen: " + ", ".join(
+        f"{k or '(none)'}={v}" for k, v in sorted(findings["content_type_counts"].items(), key=lambda kv: -kv[1])))
+    plain_lines.append("Tools seen: " + (", ".join(
+        f"{k}={v}" for k, v in sorted(findings["tool_names"].items(), key=lambda kv: -kv[1])) or "(none)"))
+    plain_report = "\n".join(plain_lines)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="Code Chat Viewer v{APP_VERSION} — Format Audit">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
+    <title>Code Chat Viewer — Format Audit</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: #FFFFFF; color: #1E1E1E; font-size: 12px; line-height: 1.5;
+        }}
+        .audit-header {{
+            background: #2D2D30; color: #CCCCCC; padding: 8px 16px;
+            display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        }}
+        .audit-header-title {{ display: flex; align-items: center; gap: 8px; font-weight: 600; }}
+        .audit-header-title img {{ height: 14px; width: 14px; }}
+        .audit-header a {{ color: #7EC8F0; text-decoration: none; font-size: 11px; }}
+        .audit-header a:hover {{ text-decoration: underline; }}
+        .audit-copy {{
+            flex-shrink: 0;
+            background: #2D2D30; color: #FFFFFF; border: none;
+            border-radius: 4px; padding: 5px 14px; font-family: inherit;
+            font-size: 11px; font-weight: 600; cursor: pointer;
+        }}
+        .audit-copy:hover {{ background: #1E1E20; }}
+        .audit-meta {{
+            background: #F5F5F5; border-bottom: 1px solid #E0E0E0;
+            padding: 6px 16px; font-size: 11px; color: #555;
+        }}
+        .audit-banner {{ padding: 10px 16px; font-size: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
+        .audit-banner-ok {{ background: #F0FFF4; color: #176B3A; border-bottom: 1px solid #C6F6D5; }}
+        .audit-banner-warn {{ background: #FFFBEB; color: #92400E; border-bottom: 1px solid #FDE68A; }}
+        .audit-banner a {{ color: #9A3412; font-weight: 600; }}
+        .audit-arrow {{ font-weight: 700; font-size: 14px; opacity: 0.65; }}
+        .audit-container {{ padding: 12px 16px; max-width: 1100px; margin: 0 auto; }}
+        .audit-section {{
+            border: 1px solid #E5E5E5; border-left: 3px solid #999;
+            border-radius: 4px; margin-bottom: 10px; padding: 10px 12px;
+        }}
+        .audit-format {{ border-left-color: #2563EB; }}
+        .audit-dropped {{ border-left-color: #D97706; }}
+        .audit-error {{ border-left-color: #DC2626; }}
+        .audit-summary {{ border-left-color: #6B7280; }}
+        .audit-title {{ font-size: 13px; margin-bottom: 4px; }}
+        .audit-intro {{ color: #666; font-size: 11px; margin-bottom: 8px; }}
+        .audit-list {{ list-style: none; }}
+        .audit-list > li {{ padding: 3px 0; border-bottom: 1px solid #F0F0F0; }}
+        .audit-sublist {{ list-style: none; margin: 2px 0 6px 16px; }}
+        .audit-sublist > li {{ padding: 1px 0; color: #444; border: none; }}
+        .audit-kind {{ color: #888; }}
+        code {{ background: #F3F4F6; padding: 1px 5px; border-radius: 3px; color: #B45309; }}
+        .audit-footer {{ text-align: center; color: #999; font-size: 10px; padding: 12px; }}
+        .audit-footer a {{ color: #888; }}
+    </style>
+</head>
+<body>
+    <div class="audit-header">
+        <div class="audit-header-title">
+            <img src="data:image/png;base64,{ICON_BASE64}" alt="">
+            Format Audit · v{APP_VERSION}
+        </div>
+        <a href="{index_filename}">&#9664; Dashboard</a>
+    </div>
+    <div class="audit-meta">Scope: {escape(scope)} · Generated: {escape(gen_time)}</div>
+    {banner}
+    <div class="audit-container">
+        {sections_block}
+    </div>
+    <div class="audit-footer">
+        Code Chat Viewer · <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank" rel="noopener">github.com/oskar-gm/code-chat-viewer</a>
+    </div>
+    <textarea id="audit-report-text" readonly aria-hidden="true" style="position:absolute; left:-9999px; top:-9999px;">{escape(plain_report)}</textarea>
+    <script>
+        function copyAuditReport() {{
+            var ta = document.getElementById('audit-report-text');
+            var btn = document.querySelector('.audit-copy');
+            var done = function() {{
+                var original = btn.getAttribute('data-label') || btn.textContent;
+                btn.setAttribute('data-label', original);
+                btn.textContent = '\\u2713 Copied';
+                setTimeout(function() {{ btn.textContent = btn.getAttribute('data-label'); }}, 1500);
+            }};
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(ta.value).then(done, function() {{ ta.select(); document.execCommand('copy'); done(); }});
+            }} else {{
+                ta.select(); document.execCommand('copy'); done();
+            }}
+        }}
+    </script>
+</body>
+</html>"""
+
+    audit_filename = f"CCV-Audit {datetime.now().strftime('%Y-%m-%d %H-%M')}.html"
+    audit_path = output_path / audit_filename
+    with open(audit_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return audit_path, findings
+
+
 def main():
     # Parse flags
     name_search = None
@@ -2628,6 +2990,12 @@ def main():
     current_jsonl_path = None
     force_regen = "--force" in sys.argv
     btw_mode = "--btw" in sys.argv
+    audit_mode = "--audit" in sys.argv
+    audit_scan = "50"
+    if audit_mode:
+        idx = sys.argv.index("--audit")
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
+            audit_scan = sys.argv[idx + 1]
 
     if "--name" in sys.argv:
         idx = sys.argv.index("--name")
@@ -2682,10 +3050,11 @@ def main():
 
     # Interactive mode selection (manual/double-click only)
     if (sys.stdout.isatty() and not name_search and not current_mode
-            and not force_regen and not btw_mode):
+            and not force_regen and not btw_mode and not audit_mode):
         print("  [1] Normal — update only modified chats (fast)")
         print("  [2] Force  — regenerate ALL chats from scratch (slow)")
         print("  [3] BTW    — generate btw.html from /btw history (skip chats)")
+        print("  [4] Audit  — scan recent chats for format anomalies (skip chats)")
         print()
         choice = input("  Select mode [1]: ").strip()
         if choice == "2":
@@ -2696,6 +3065,10 @@ def main():
             btw_mode = True
             print()
             print("  BTW mode: generating btw.html from history.jsonl.")
+        elif choice == "4":
+            audit_mode = True
+            print()
+            print("  Audit mode: scanning the 50 most recent chats for anomalies.")
         print()
 
     # ---- BTW mode short-circuit: skip chat scan / organize / dashboard ----
@@ -2714,6 +3087,27 @@ def main():
             print("  No /btw queries found — nothing to generate.")
             print("=" * 52)
             print()
+        if sys.stdout.isatty() and os.name == 'nt':
+            _countdown_close(60)
+        return
+
+    # ---- Audit mode short-circuit: scan recent chats, skip generate/organize ----
+    if audit_mode:
+        print("-" * 52)
+        print("  Generating format audit...")
+        audit_file, findings = generate_audit_view(config, audit_scan)
+        print()
+        print("=" * 52)
+        print(f"  Audit ready: {audit_file}")
+        print(f"  Scanned: {findings['scanned']} chat(s)")
+        if _audit_has_findings(findings):
+            print("  Findings detected - see the report. If something looks wrong,")
+            print("  feedback is welcome: github.com/oskar-gm/code-chat-viewer/issues")
+        else:
+            print("  All clear - no anomalies.")
+        print("=" * 52)
+        print()
+        open_in_browser(audit_file)
         if sys.stdout.isatty() and os.name == 'nt':
             _countdown_close(60)
         return

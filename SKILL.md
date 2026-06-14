@@ -112,6 +112,7 @@ The manager supports CLI flags to open a specific chat instead of the dashboard:
 | `--current` | `python scripts/manager.py --current` | Auto-detect current session from CWD |
 | `--force` | `python scripts/manager.py --force` | Regenerate ALL chats (ignores modification time check) |
 | `--btw` | `python scripts/manager.py --btw` | Generate `btw.html` aggregating all `/btw` queries (skips chat generation) |
+| `--audit` | `python scripts/manager.py --audit 50` | Scan recent chats (50 by default; pass a number or `all`) for format anomalies and write a report (skips chat generation) |
 
 Flags can be combined: `python scripts/manager.py --force --name "my chat"`
 
@@ -178,6 +179,7 @@ The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HT
 - **Snapshot filtering**: Automatically excludes file-history-snapshot entries (Claude Code's undo system)
 - **Header buttons**: Feedback (opens GitHub Issues) and Latest release (links to the newest release to check for updates); Feedback also in footer
 - **BTW Queries view**: `[3]` in the interactive menu or the `--btw` flag generates a standalone `btw.html` aggregating every `/btw` query from `~/.claude/history.jsonl`, grouped by chat, with Expand/Collapse all and a real-time filter
+- **Format Audit**: `[4]` in the interactive menu or the `--audit` flag scans the most recent chats (50 by default, or `all`) for format anomalies — unrecognized message/content types, empty thinking/text blocks, parse errors — and writes a `CCV-Audit <date>.html` report next to the dashboard, opening it on completion. Read-only; useful after a Claude Code update to spot JSONL format changes
 
 ## Chat Page Features
 
