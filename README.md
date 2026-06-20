@@ -1,23 +1,47 @@
 # Code Chat Viewer
 
-> Convert Claude Code chat logs (JSONL) to professional, browsable HTML visualizations. Export AI conversations, build interactive dashboards, and organize your coding assistant history — with or without Claude Code.
+> Turn your Claude Code chat logs into a clean, searchable visual panel — offline, zero dependencies.
+
+Claude Code stores your conversations as raw JSONL files. **Code Chat Viewer** turns them into polished, self-contained HTML pages plus an **interactive dashboard** to search, sort, filter and browse your whole history. Pure Python standard library — nothing to install.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.4.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.4.0)
+[![Version](https://img.shields.io/badge/version-2.5.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.5.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
-![Chat View](https://github.com/oskar-gm/code-chat-viewer/releases/download/v2.0/ccv-2.0-screenshot-1.jpeg)
+[<img src="https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-chat.png" width="640" alt="Chat View">](https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-chat.png)
 
 ### Dashboard
-![Dashboard](https://github.com/oskar-gm/code-chat-viewer/releases/download/v2.0/ccv-2.0-screenshot-3.jpeg)
+[<img src="https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-dashboard.png" width="640" alt="Dashboard">](https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-dashboard.png)
+
+<details>
+<summary>📸 More — conversation rewind, image lightbox, /btw view</summary>
+
+<br>
+
+[<img src="https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-rewind.png" width="250" alt="Conversation rewind">](https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-rewind.png) [<img src="https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-modal.png" width="250" alt="Image lightbox">](https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-modal.png) [<img src="https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-btw.png" width="250" alt="/btw view">](https://raw.githubusercontent.com/oskar-gm/code-chat-viewer/main/assets/ccv-2.5-btw.png)
+
+</details>
+
+### ⚡ Two easy ways to use it
+
+**A — Standalone (no Claude Code needed)**
+
+1. Download or clone this repo
+2. Double-click `scripts/manager.py` — the first run asks a few quick questions and writes the config for you, then builds the dashboard and opens it in your browser
+3. Next time, just double-click and pick *Normal* (only changed chats) or *Force* (rebuild all)
+
+**B — As a Claude Code skill**
+
+1. Clone into `~/.claude/skills/` (global) or a project's `.claude/skills/`
+2. Ask Claude Code *"set up the chat visualizer"* — it finds your chats, walks you through the config, and generates everything
 
 ## Quick Download
 
-**Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/releases/latest) - Always up-to-date
+**Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/archive/refs/heads/main.zip) - Always up-to-date (direct download of `main`)
 
-**Version 2.4.0:** [Download v2.4.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.4.0.zip) - Stable release
+**Version 2.5.0:** [Download v2.5.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.5.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -141,7 +165,7 @@ Environment variables (take precedence over `config.json`):
 - One-click expand/collapse for all Edit and Write blocks in the chat
 - Color-coded navigation highlights per message type (blue/green/purple/amber/red)
 - CLI flags: `--name`, `--current`, `--force` for targeted operations
-- Chat title displayed in HTML header (resolved from session metadata)
+- Chat title displayed in HTML header (resolved from session metadata, including AI-generated title as fallback above first prompt)
 - Chat UUID displayed on the right side of the header, with selectable text and a one-click SVG copy button
 - Interactive mode selection (normal/force) for manual execution
 - Full interactive setup with all options configurable
@@ -149,6 +173,72 @@ Environment variables (take precedence over `config.json`):
 - Header buttons: Feedback (opens GitHub Issues) and Latest release (check for updates)
 - App version shown in the header
 - Windows-friendly: scripts pause on double-click (no instant close)
+- Images rendered in a modal/lightbox: `image`-type content shows as an "Open image" link (with media type and file size); clicking opens the image in a full-screen overlay (X button, ESC, or click outside to close; responsive `max 92vw/88vh`). The base64 data is embedded in the HTML and loaded as a blob URL to avoid browser navigation restrictions
+- System markers formatted inline: `<system-reminder>` content displayed in orange (without the tags); `[Request interrupted by user]` displayed with a soft red background and red text
+- Redundant twin messages hidden: the textual twin of an image (`[Image: source: …]`) and of a tool rejection (`[Request interrupted by user for tool use]`) are suppressed, since the image and the `[REJECTED]` block already represent those events
+- Dashboard toolbar redesigned: a **Search** toggle button shows/hides the search row (search + exclude inputs) with memory when hidden; a **scope selector** ("Search names only", on by default) limits search to the chat name or searches the full row when unchecked; a **Clear** button resets all saved state (selection, filters, columns, expanded rows, search); responsive at two breakpoints (Search/Clear separate from Filter+Columns at ≤1000px; Filter separates from Columns at ≤680px)
+- Format Audit (`[4]` in interactive menu or `--audit` flag): scans recent chats against the catalog of known message/content types and generates a `CCV-Audit <date>.html` report, opened automatically on completion. Useful for detecting JSONL format changes after a Claude Code update
+- Cleaner First prompt and chat names: non-real messages (caveats, slash commands, command output, task notifications) no longer leak into the dashboard's First prompt or chat name — they are skipped when reading the first real user message (fixes chats that start with a compact)
+- Inline images: when the user's text references a pasted image with an `[Image #N]` marker, the marker itself becomes a clickable chip that opens the image in the modal (mapped by paste order) — no separate "Open image" button for those
+- Assistant metadata order: model name first, then the date/time in bold so it stands out, then the branch
+- Conversation rewinds surfaced: when you rewind the conversation (retry a prompt, dropping what came after), the abandoned point shows as a teal one-line marker — `↺ Rewind · N messages back · «destination»` — with a Go button that scrolls up to where the conversation resumed. Real rewinds only (tool-only forks and auto-saved snapshots are ignored); N is the on-screen distance to the destination ("just above" when it sits right over the marker)
+- Copy button on every message: an always-visible, low-key icon at the top-right of each message that copies its text (turns into a green check on success)
+- "Messages only" filter: a checkbox next to the conversation filter that hides everything except user/assistant messages with real text (tools, thinking, compacts, snapshots…); combines with the text filter
+- Stats bar shows a real Rewinds count (replaces the old raw Snapshots count)
+- Chat header shows the creation date labelled `Created:`, in a format tied to the time setting (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
+- Edit/Write diff theme toggle clarified: the button previews the current theme (dark while the diff is dark, cream once light) and its label states the action ("Switch to light/dark")
+
+### What's New in v2.5
+
+**Chat viewer:**
+- Conversation rewinds surfaced: real rewinds show as a one-line teal marker `↺ Rewind · N messages back · «destination»` with a Go button to where the conversation resumed (tool-only forks and auto-saved snapshots ignored; "just above" when the destination sits right over the marker)
+- Inline images: `[Image #N]` markers in the text become clickable chips that open the image in the modal (mapped by paste order)
+- Image modal/lightbox: `image`-type content opens in a full-screen overlay (X / ESC / click-out), decoded to a blob URL; shows media type and size
+- System markers formatted inline: `<system-reminder>` in orange (tags stripped), `[Request interrupted by user]` in soft red
+- Redundant twin messages hidden (the textual twin of an image and of a tool rejection)
+- Copy button on every message (always visible, green check on copy)
+- "Messages only" filter next to the conversation filter (keeps user/assistant text only; combines with the text filter)
+- Assistant metadata: model first, then the date/time in bold
+- Creation date in the header (`Created:`), formatted per the time setting (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
+- Message separator redrawn as an adaptive CSS line (no horizontal scroll on narrow windows)
+- Stats bar shows a real Rewinds count (was a raw Snapshots count)
+- Clearer Edit/Write diff theme toggle (previews the current theme; label states the action)
+- Chat title falls back to the AI-generated title (above the first prompt, below `/rename` and summary)
+- AskUserQuestion answers redesigned: the question with its header as a chip, the offered options with the chosen one highlighted (and its description), free-text "Other" answers shown verbatim, plus multi-select and notes — built from the structured result, robust to wording changes
+- State remembered across a refresh (per chat, via sessionStorage — wiped when the tab closes, so reopening starts clean): scroll position, Edit/Write diff theme, the user/bot/all selector, search + "Messages only", and which Edit/Write blocks are open (thinking and other non-button foldables reset closed by design). A brief loading overlay hides the restore jump
+- Agent chats are marked: a chat opened from a sub-agent shows an "AGENT CHAT" chip in its header, and "agent completed" notices name which agent ran (`subagent_type · description`) and link to its chat (new tab) when its HTML exists
+- Commands sent with "!" (Claude Code's bash prompt) render as `! cmd` in red, with their stdout/stderr shown cleanly
+
+**Accessibility:**
+- WCAG AA contrast on the rewind block (teal text and the Go button)
+- Image modal: the close button sits on a translucent disc with a text-shadow (legible over any image), a 44×44 hit area and a visible focus ring; the modal is a proper `role="dialog"` + `aria-modal` with a focus trap and focus returned to the trigger on close
+
+**Dashboard:**
+- Toolbar redesign: a Search toggle, a scope selector ("Search names only"), and a Clear button that resets all saved state; responsive at two breakpoints
+- Select mode persists across a refresh (the individual delete marks do not — transient on purpose)
+- Agent chats: sub-chats launched by the Task tool (under `<session>/subagents/`) show via an "Agents" toggle in the View group (off by default), with a count in the stats bar. Each carries an AGENT badge and is **nested under its invoking chat** with a subtle `└─` connector (in invocation order, kept glued when sorting); its name is `subagent_type · description` (e.g. "Auditor · Audit the login"). Orphan agents (invoker not generated) are grouped in a collapsible block at the end. Compaction agents and context-ref forks are filtered out
+- Sticky table header (no gap on scroll); the BTW and Audit views moved to a "+" menu (same tab, shared header/footer and "← Back to Dashboard"); the Audit report has a "Delete this report" button; the BTW view is refreshed on every run
+- Version-aware: after a minor/major update the script recommends a Force rebuild — everything re-renders consistently with the new version (applying all fixes). Chat state survives a refresh but resets when the chat is reopened
+- Format Audit (`[4]` / `--audit`): scans recent chats for format anomalies and writes a `CCV-Audit <date>.html` report — handy after a Claude Code update
+- Cleaner First prompt and chat names: non-real messages (caveats, commands, output, task notifications) no longer leak in
+
+**Setup:**
+- First-time setup now asks for `time_format` (12h/24h), which also sets the header date format
+
+**Quality:**
+- pytest test suite in `tests/` covering parsing, rendering, chat generation, dashboard utilities and regressions (synthetic fixtures)
+- Robustness fixes: defensive parsing for string-serialized tool inputs (AskUserQuestion / MultiEdit) and non-string timestamps
+
+**Fixes:**
+- BTW view: footer pinned to the bottom; the project column now reflects each chat's working directory (matching the dashboard) instead of the folder name
+- Image modal overlay lightened (55%) so the conversation shows through behind the opened image
+- Queued messages (sent while Claude was working) now render instead of silently disappearing
+- AskUserQuestion answers are recognised again after Claude Code changed the result wording
+- Failed background-agent notifications shown in red
+- Non-consecutive `[Image #N]` markers (e.g. #1 + #3) map to the right image instead of dropping it
+- Uniform vertical spacing inside Edit/Write tool blocks (matches the generic tool and thinking blocks)
+- Rewind Go button reaches compact-summary destinations and destinations hidden by an active filter (it clears the filter first); a visible toast appears if a target can't be located
+- user/bot/all jumps now start from the current scroll position (reliable after a native Ctrl+F or manual scroll)
 
 ### What's New in v2.4
 
@@ -271,15 +361,13 @@ You do **not** need Claude Code to use this tool. Both scripts work standalone w
 python scripts/visualizer.py path/to/chat.jsonl output.html
 ```
 
-**Batch generation with dashboard** (requires config.json):
+**Batch generation with dashboard:**
 
 ```bash
-# 1. Create your config from the template
-cp config.example.json config.json
-# 2. Edit config.json — set projects_path to your Claude Code projects folder
-# 3. Run the manager
 python scripts/manager.py
 ```
+
+On the first run there's no `config.json` yet, so the manager launches an **interactive setup** — it asks where your Claude Code chats are (and a few options) and writes `config.json` for you. No manual editing needed. After that it just reads `config.json`. *(You can still pre-create it from the template with `cp config.example.json config.json` if you prefer.)*
 
 **CLI flags:**
 
@@ -342,6 +430,8 @@ Each chat file is named with a UUID (e.g., `c5f2a3e1-1234-5678-9abc-def012345678
 - **Tool results**: Orange (`#FF6B00`) with gray background (`#F8F8F8`)
 - **Thinking blocks**: White background with subtle gray border and shadow
 - **Tool use blocks**: Dark gray (`#48484A`) with light text (`#E8E8E8`)
+- **System reminders** (`<system-reminder>`): Orange text, tags stripped
+- **User interruptions** (`[Request interrupted by user]`): Soft red background with red text
 
 ### Contributing
 
@@ -383,6 +473,21 @@ For questions, suggestions, or bug reports:
 
 <a name="español"></a>
 ## Español
+
+Claude Code guarda tus conversaciones como archivos JSONL en crudo. **Code Chat Viewer** los convierte en páginas HTML pulidas y autónomas, más un **panel interactivo** para buscar, ordenar, filtrar y navegar todo tu historial. Solo biblioteca estándar de Python — nada que instalar.
+
+### ⚡ Dos formas fáciles de usarlo
+
+**A — Standalone (sin Claude Code)**
+
+1. Descarga o clona este repo
+2. Doble clic en `scripts/manager.py` — la primera vez te hace unas preguntas rápidas y crea la configuración por ti, luego genera el panel y lo abre en tu navegador
+3. Las siguientes veces, doble clic y eliges *Normal* (solo los chats modificados) o *Force* (regenerar todo)
+
+**B — Como skill de Claude Code**
+
+1. Clona en `~/.claude/skills/` (global) o en `.claude/skills/` de un proyecto
+2. Pide a Claude Code *"configura el visualizador de chats"* — detecta tus chats, te guía por la configuración y genera todo
 
 ### Compatibilidad directa con Claude Code CLI
 
@@ -495,7 +600,7 @@ Variables de entorno (tienen precedencia sobre `config.json`):
 - Expandir/contraer todos los bloques Edit y Write con un clic
 - Resaltado de navegación por color según tipo de mensaje (azul/verde/morado/ámbar/rojo)
 - Flags CLI: `--name`, `--current`, `--force` para operaciones dirigidas
-- Título del chat en el header del HTML (resuelto desde metadatos de sesión)
+- Título del chat en el header del HTML (resuelto desde metadatos de sesión, incluyendo el título generado por IA como fallback por encima del primer prompt)
 - UUID del chat en el lado derecho del header, con texto seleccionable y botón SVG de copia con un clic
 - Selección de modo interactiva (normal/force) en ejecución manual
 - Setup interactivo completo con todas las opciones configurables
@@ -503,6 +608,72 @@ Variables de entorno (tienen precedencia sobre `config.json`):
 - Botones del header: Feedback (abre los Issues de GitHub) y Latest release (comprobar actualizaciones)
 - Versión de la app visible en el header
 - Compatible con Windows: los scripts se pausan al hacer doble clic (sin cierre instantáneo)
+- Imágenes renderizadas en modal/lightbox: el contenido de tipo `image` se muestra como enlace "Open image" (con tipo y peso); al hacer clic se abre en un overlay a pantalla completa (botón X, ESC o clic fuera para cerrar; responsive `max 92vw/88vh`). El base64 queda embebido en el HTML y se carga como blob URL para evitar restricciones del navegador
+- Marcadores del sistema formateados inline: el contenido de `<system-reminder>` se muestra en naranja (sin las etiquetas); `[Request interrupted by user]` aparece con fondo rojo suave y texto rojo
+- Mensajes gemelos redundantes ocultos: el gemelo textual de una imagen (`[Image: source: …]`) y el de un rechazo de tool (`[Request interrupted by user for tool use]`) se suprimen, ya que la imagen y el bloque `[REJECTED]` representan esos eventos
+- Toolbar del dashboard rediseñada: botón **Search** (toggle) que despliega/oculta la fila de búsqueda (inputs buscar + excluir) con memoria al ocultar; **selector de ámbito** ("Search names only", marcado por defecto) que limita la búsqueda al nombre del chat o busca en toda la fila al desmarcarlo; botón **Clear** que resetea todo el estado guardado (selección, filtros, columnas, desplegables, búsqueda); responsive en dos breakpoints (Search/Clear se separan de Filter+Columns en ≤1000px; Filter se separa de Columns en ≤680px)
+- Format Audit (`[4]` en el menú interactivo o flag `--audit`): escanea chats recientes contra el catálogo de tipos conocidos y genera un informe `CCV-Audit <fecha>.html`, abriéndolo automáticamente al terminar. Útil para detectar cambios de formato JSONL tras actualizar Claude Code
+- First prompt y nombres de chat más limpios: los mensajes no-reales (caveats, comandos, salida de comandos, notificaciones de tareas) ya no se cuelan en el First prompt ni en el nombre del chat del dashboard — se saltan al leer el primer mensaje real del usuario (corrige los chats que empiezan con un compact)
+- Imágenes inline: cuando el texto del usuario referencia una imagen pegada con un marcador `[Image #N]`, el propio marcador se convierte en un chip clicable que abre la imagen en el modal (mapeado por orden de pegado) — sin botón "Open image" separado para esas
+- Orden del metadata del asistente: primero el modelo, luego la fecha/hora en negrita para que destaque, luego la rama
+- Rewinds de conversación visibles: cuando retrocedes la conversación (reintentas un prompt y descartas lo posterior), el punto abandonado se muestra como un marcador teal de una línea — `↺ Rewind · N messages back · «destino»` — con un botón Go que sube hasta donde se reanudó. Solo rewinds reales (se ignoran los forks de solo herramientas y los snapshots automáticos); N es la distancia visual al destino ("just above" cuando queda justo encima del marcador)
+- Botón de copiar en cada mensaje: un icono discreto siempre visible arriba a la derecha de cada mensaje que copia su texto (✓ verde al copiar)
+- Filtro "Messages only": checkbox junto al filtro de conversación que oculta todo salvo mensajes de usuario/asistente con texto real (tools, thinking, compacts, snapshots…); se combina con el filtro de texto
+- La barra de estadísticas muestra un contador real de Rewinds (sustituye al antiguo conteo bruto de Snapshots)
+- El header del chat muestra la fecha de creación etiquetada `Created:`, en un formato ligado al ajuste de hora (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
+- Toggle de tema de diffs Edit/Write clarificado: el botón previsualiza el tema actual (oscuro mientras el diff está oscuro, crema cuando está claro) y su etiqueta indica la acción ("Switch to light/dark")
+
+### Novedades en v2.5
+
+**Visor de chats:**
+- Rewinds de conversación visibles: los rewinds reales se muestran como un marcador teal de una línea `↺ Rewind · N messages back · «destino»` con un botón Go que lleva a donde se reanudó la conversación (se ignoran los forks de solo herramientas y los snapshots automáticos; "just above" cuando el destino queda justo encima del marcador)
+- Imágenes inline: los marcadores `[Image #N]` del texto se convierten en chips clicables que abren la imagen en el modal (mapeado por orden de pegado)
+- Modal/lightbox de imágenes: el contenido de tipo `image` se abre en un overlay a pantalla completa (X / ESC / clic fuera), decodificado a blob URL; muestra tipo y peso
+- Marcadores del sistema formateados inline: `<system-reminder>` en naranja (sin etiquetas), `[Request interrupted by user]` en rojo suave
+- Mensajes gemelos redundantes ocultos (el gemelo textual de una imagen y el de un rechazo de tool)
+- Botón de copiar en cada mensaje (siempre visible, ✓ verde al copiar)
+- Filtro "Messages only" junto al filtro de conversación (mantiene solo texto de usuario/asistente; se combina con el filtro de texto)
+- Metadata del asistente: primero el modelo, luego la fecha/hora en negrita
+- Fecha de creación en el header (`Created:`), con formato ligado al ajuste de hora (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
+- Separador entre mensajes rediseñado como línea CSS adaptable (sin scroll horizontal en ventanas estrechas)
+- La barra de estadísticas muestra un contador real de Rewinds (antes un conteo bruto de Snapshots)
+- Toggle de tema de diffs Edit/Write más claro (previsualiza el tema actual; la etiqueta indica la acción)
+- El título del chat recurre al título generado por IA (por encima del primer prompt, por debajo de `/rename` y el summary)
+- Respuesta de AskUserQuestion rediseñada: la pregunta con su header como chip, las opciones ofrecidas con la elegida resaltada (y su descripción), las respuestas libres de "Other" mostradas tal cual, además de multi-select y notas — construido desde el resultado estructurado, robusto a cambios de wording
+- Estado recordado entre refrescos (por chat): sobrevive a F5/atrás-adelante pero **al reabrir el chat empieza limpio** (se detecta el tipo de navegación, fiable aunque sessionStorage persista en file://). Guarda scroll, tema de los diffs Edit/Write, el selector user/bot/all, búsqueda + "Messages only" y qué bloques Edit/Write quedan abiertos (thinking y demás desplegables no-botón se resetean cerrados a propósito). Un breve overlay de carga oculta el salto de la restauración
+- Los chats de agente se marcan: un chat abierto desde un subagente muestra un chip "AGENT CHAT" en su header, y los avisos de "agent completed" nombran qué agente corrió (`subagent_type · description`) y enlazan a su chat (pestaña nueva) si su HTML existe
+- Los comandos enviados con "!" (el prompt bash de Claude Code) se renderizan como `! cmd` en rojo, con su stdout/stderr limpio
+
+**Accesibilidad:**
+- Contraste WCAG AA en el bloque de rewind (texto teal y botón Go)
+- Modal de imagen: el botón de cerrar va sobre un disco translúcido con text-shadow (legible sobre cualquier imagen), área táctil 44×44 y anillo de foco visible; el modal es un `role="dialog"` + `aria-modal` con focus-trap y el foco vuelve al disparador al cerrar
+
+**Dashboard:**
+- Rediseño de la toolbar: botón Search (toggle), selector de ámbito ("Search names only") y botón Clear que resetea todo el estado guardado; responsive en dos breakpoints
+- El modo Select se mantiene tras un refresco (las marcas de borrado individuales no — son transitorias a propósito)
+- Chats de agente: los sub-chats lanzados por la herramienta Task (en `<sesión>/subagents/`) se muestran con un toggle "Agents" en el grupo View (desactivado por defecto), con un contador en la barra de estado. Cada uno lleva un badge AGENT y se **anida bajo su chat invocador** con un conector `└─` sutil (en orden de invocación, pegado al ordenar); su nombre es `subagent_type · description` (ej. "Auditor · Auditar el login"). Los agentes huérfanos (invocador no generado) se agrupan en un desplegable al final. Los agentes de compactación y los fork de contexto se filtran
+- Cabecera de tabla fija (sticky, sin hueco al hacer scroll); las vistas BTW y Audit pasan a un menú "+" (misma pestaña, con header/footer compartido y enlace "← Back to Dashboard"); el informe de Audit tiene un botón "Delete this report"; la vista BTW se regenera en cada ejecución
+- Consciente de la versión: tras una actualización minor/major el script recomienda un Force — todo se re-renderiza de forma consistente con la nueva versión (aplicando todos los fixes)
+- Format Audit (`[4]` / `--audit`): escanea chats recientes en busca de anomalías de formato y genera un informe `CCV-Audit <fecha>.html` — útil tras actualizar Claude Code
+- First prompt y nombres de chat más limpios: los mensajes no-reales (caveats, comandos, salida, notificaciones de tareas) ya no se cuelan
+
+**Setup:**
+- El setup inicial ahora pregunta `time_format` (12h/24h), que además fija el formato de fecha del header
+
+**Calidad:**
+- Suite de tests pytest en `tests/` que cubre parseo, renderizado, generación de chats, utilidades del dashboard y regresiones (fixtures sintéticas)
+- Correcciones de robustez: parseo defensivo de inputs de tools serializados como string (AskUserQuestion / MultiEdit) y timestamps no-string
+
+**Correcciones:**
+- Vista BTW: footer anclado al fondo; la columna de proyecto refleja ahora el directorio de trabajo de cada chat (igual que el dashboard) en vez del nombre de la carpeta
+- Overlay del modal de imagen aclarado (55%) para que la conversación se intuya tras la imagen abierta
+- Los mensajes en cola (enviados mientras Claude trabajaba) ahora se renderizan en vez de desaparecer en silencio
+- Las respuestas de AskUserQuestion se reconocen de nuevo tras el cambio de wording del resultado en Claude Code
+- Las notificaciones de agente en segundo plano fallido se muestran en rojo
+- Los marcadores `[Image #N]` no consecutivos (p. ej. #1 + #3) mapean a su imagen en vez de perderla
+- Espaciado vertical uniforme dentro de los bloques de tool Edit/Write (igual que el tool genérico y los bloques thinking)
+- El botón Go del rewind alcanza destinos compact-summary y destinos ocultos por un filtro activo (limpia el filtro primero); aparece un toast visible si un destino no se localiza
+- Los saltos user/bot/all parten ahora de la posición de scroll actual (fiable tras un Ctrl+F nativo o scroll manual)
 
 ### Novedades en v2.4
 
@@ -625,15 +796,13 @@ Variables de entorno (tienen precedencia sobre `config.json`):
 python scripts/visualizer.py ruta/al/chat.jsonl salida.html
 ```
 
-**Generación por lotes con panel** (requiere config.json):
+**Generación por lotes con panel:**
 
 ```bash
-# 1. Crear tu configuración desde la plantilla
-cp config.example.json config.json
-# 2. Editar config.json — configurar projects_path con la carpeta de proyectos de Claude Code
-# 3. Ejecutar el manager
 python scripts/manager.py
 ```
+
+En la primera ejecución no hay `config.json` todavía, así que el manager lanza un **setup interactivo** — te pregunta dónde están tus chats de Claude Code (y algunas opciones) y crea `config.json` por ti. Sin editar nada a mano. Después solo lee `config.json`. *(Si lo prefieres, puedes pre-crearlo desde la plantilla con `cp config.example.json config.json`.)*
 
 **Flags CLI:**
 
@@ -696,6 +865,8 @@ Cada archivo de chat tiene un nombre UUID (ej: `c5f2a3e1-1234-5678-9abc-def01234
 - **Resultados de herramientas**: Naranja (`#FF6B00`) con fondo gris (`#F8F8F8`)
 - **Bloques de pensamiento**: Fondo blanco con borde gris sutil y sombra
 - **Bloques tool use**: Gris oscuro (`#48484A`) con texto claro (`#E8E8E8`)
+- **System reminders** (`<system-reminder>`): Texto naranja, etiquetas eliminadas
+- **Interrupciones del usuario** (`[Request interrupted by user]`): Fondo rojo suave con texto rojo
 
 ### Contribuir
 

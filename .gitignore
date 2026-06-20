@@ -73,6 +73,9 @@ $RECYCLE.BIN/
 # Generated HTML files (chat exports + dashboard)
 *.html
 
+# Screenshot / demo assets (generated locally for the README and releases; not tracked)
+/screenshots/
+
 # Test files and outputs (generated during development)
 test_*.json
 sample_*.json
@@ -100,6 +103,7 @@ NOTES.md
 CLAUDE.md
 INSTRUCCIONES.md
 REGISTRO.md
+SLIPKNOT.md
 *.draft
 
 # Distribution archives

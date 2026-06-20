@@ -131,7 +131,7 @@ def interactive_setup() -> Path:
         "_readme": "Code Chat Viewer - Configuration. Edit or delete this file to reconfigure.",
         "source": {"projects_path": source},
         "output": {"folder": output, "index_filename": dashboard},
-        "agents": {"include": include_agents, "min_size_kb": min_agent_kb},
+        "agents": {"include": include_agents, "min_size_kb": min_agent_kb, "include_compaction": False},
         "inactive_days": inactive_days,
         "shorts": {
             "enabled": shorts_enabled,
@@ -209,12 +209,21 @@ def load_config() -> dict:
 sys.path.insert(0, str(SCRIPT_DIR))
 from visualizer import (  # noqa: E402
     APP_VERSION,
+    AGENT_HTML_MAP,
     parse_chat_json,
     generate_html,
     get_chat_timestamp,
     generate_output_filename,
     ICON_BASE64,
     ICON_FAVICON_BASE64,
+    KNOWN_MESSAGE_TYPES,
+    KNOWN_METADATA_TYPES,
+    KNOWN_CONTENT_TYPES,
+    is_caveat_message,
+    is_stdout_message,
+    is_task_notification,
+    parse_command_tags,
+    is_image_source_message,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,24 +231,107 @@ from visualizer import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
+def agent_hash_from_filename(filename: str) -> str:
+    """Unique id for an agent chat: the final '-' segment of agent-[name-]<hash>
+    (the agentId-like suffix). Unique even across same-named agents, unlike a
+    fixed-length prefix that collides once there are hundreds of agents."""
+    stem = Path(filename).stem
+    body = stem[len("agent-"):] if stem.startswith("agent-") else stem
+    return body.rsplit("-", 1)[-1]
+
+
 def get_hash_from_filename(filename: str) -> str:
     """Extract the hash prefix from a JSONL or HTML filename.
 
-    Handles both regular chats (UUID-based) and agent chats (agent-XX prefix).
+    Regular chats use the first 8 chars of the UUID; agent chats use the full
+    agentId-like suffix (see agent_hash_from_filename) so 675 agents don't collide.
     """
     name = Path(filename).stem
 
     if name.startswith("agent-"):
-        return name.replace("agent-", "")[:8]
+        return agent_hash_from_filename(name)
 
     parts = name.split()
     if parts:
         last_part = parts[-1]
         if last_part.startswith("Agent-"):
-            last_part = parts[-2] if len(parts) > 1 else last_part
+            return last_part[len("Agent-"):]
         return last_part[:8]
 
     return name.split("-")[0][:8]
+
+
+def is_fork_context_ref(jsonl_path: Path) -> bool:
+    """A file under subagents/ whose first record is a fork context reference
+    (`type: fork-context-ref`), not a real agent chat with navigable messages."""
+    try:
+        with open(jsonl_path, encoding="utf-8") as fh:
+            first = fh.readline()
+        return json.loads(first).get("type") == "fork-context-ref"
+    except (OSError, ValueError):
+        return False
+
+
+def agent_first_record(jsonl_path: Path) -> dict:
+    """First JSONL record of an agent chat (carries agentId, slug, sessionId…)."""
+    try:
+        with open(jsonl_path, encoding="utf-8") as fh:
+            return json.loads(fh.readline())
+    except (OSError, ValueError):
+        return {}
+
+
+def build_agent_invocations(parent_jsonl: Path) -> dict:
+    """Map {agentId: (subagent_type, description)} for the agents a parent session
+    launched. The Agent tool_use carries subagent_type + description; the matching
+    tool_result's `toolUseResult.agentId` ties it to the agent chat by tool_use_id.
+    """
+    tu = {}    # tool_use_id -> (subagent_type, description)
+    res = {}   # agentId -> tool_use_id
+    try:
+        with open(parent_jsonl, encoding="utf-8") as fh:
+            for line in fh:
+                if '"Agent"' not in line and '"toolUseResult"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                msg = o.get("message", {})
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content, list):
+                    for it in content:
+                        if not isinstance(it, dict):
+                            continue
+                        if it.get("type") == "tool_use" and it.get("name") == "Agent":
+                            inp = it.get("input", {}) if isinstance(it.get("input"), dict) else {}
+                            tu[it.get("id")] = (inp.get("subagent_type", "") or "", inp.get("description", "") or "")
+                        elif it.get("type") == "tool_result":
+                            tur = o.get("toolUseResult")
+                            if isinstance(tur, dict) and tur.get("agentId"):
+                                res[tur["agentId"]] = it.get("tool_use_id")
+    except OSError:
+        return {}
+    return {aid: tu[tuid] for aid, tuid in res.items() if tuid in tu}
+
+
+_AGENT_INV_CACHE = {}  # parent sessionId -> {agentId: (subagent_type, description)}
+
+
+def agent_label(jsonl_path: Path) -> str:
+    """'[subagent_type] · [description]' for an agent chat (from its parent
+    session), or '' if it can't be resolved. Parent invocations are cached per
+    session so the (possibly large) parent JSONL is read once."""
+    try:
+        psess = jsonl_path.parent.parent.name
+        if psess not in _AGENT_INV_CACHE:
+            _AGENT_INV_CACHE[psess] = build_agent_invocations(
+                jsonl_path.parent.parent.parent / (psess + ".jsonl"))
+        rec = agent_first_record(jsonl_path)
+        sub, desc = _AGENT_INV_CACHE.get(psess, {}).get(rec.get("agentId", ""), ("", ""))
+        return " · ".join(p for p in (sub, desc) if p)
+    except (OSError, ValueError, IndexError):
+        return ""
 
 
 def find_existing_html(output_path: Path, hash_prefix: str, is_agent: bool = False) -> Path | None:
@@ -266,8 +358,9 @@ def resolve_chat_title(jsonl_path: Path, sessions_meta: dict = None) -> str:
       1. JSONL custom_title (set by /rename) — highest priority
       2. sessions-index customTitle
       3. sessions-index summary
-      4. JSONL first_prompt (truncated to 60 chars)
-      5. "Untitled"
+      4. JSONL ai-title (above the first prompt, below summary)
+      5. JSONL first_prompt (truncated to 60 chars)
+      6. "Untitled"
     """
     hash_prefix = get_hash_from_filename(jsonl_path.name)
     index_title = ""
@@ -289,7 +382,8 @@ def resolve_chat_title(jsonl_path: Path, sessions_meta: dict = None) -> str:
     if not first_prompt and jsonl_meta.get("first_prompt"):
         first_prompt = jsonl_meta["first_prompt"][:60]
 
-    return index_title or first_prompt or "Untitled"
+    # ai-title sits above the first prompt but below /rename and summary.
+    return index_title or jsonl_meta.get("ai_title") or first_prompt or "Untitled"
 
 
 def generate_chat_html(
@@ -323,6 +417,12 @@ def generate_chat_html(
         output_path = output_dir / base_name
 
         chat_title = resolve_chat_title(jsonl_path, sessions_meta)
+        # Agent chat: the subagents/ folder hangs off the invoking session's UUID.
+        agent_of = jsonl_path.parent.parent.name if agent_suffix else None
+        if agent_suffix:
+            label = agent_label(jsonl_path)
+            if label:
+                chat_title = label
 
         with redirect_stdout(io.StringIO()):
             generate_html(
@@ -332,6 +432,7 @@ def generate_chat_html(
                 chat_uuid=jsonl_path.stem,
                 history_entries=history_entries,
                 time_format=time_format,
+                agent_of=agent_of,
             )
 
         return base_name, None
@@ -340,23 +441,24 @@ def generate_chat_html(
 
 
 def find_jsonl_for_html(projects_path: Path, html_name: str) -> Path | None:
-    """Find the original JSONL file corresponding to an HTML by hash matching."""
+    """Find the original JSONL file corresponding to an HTML by hash matching.
+
+    Agent chats live under <project>/<session>/subagents/agent-*.jsonl, matched
+    by their full agentId-like hash; regular chats sit at the project root.
+    """
     hash_prefix = get_hash_from_filename(html_name)
     is_agent = "Agent-" in html_name
 
     for project_dir in projects_path.iterdir():
         if not project_dir.is_dir():
             continue
-        for jsonl_file in project_dir.glob("*.jsonl"):
-            filename = jsonl_file.name
-            if is_agent:
-                if filename.startswith("agent-"):
-                    agent_id = filename.replace("agent-", "").replace(".jsonl", "")[:2]
-                    if agent_id in html_name:
-                        return jsonl_file
-            else:
-                jsonl_hash = get_hash_from_filename(filename)
-                if jsonl_hash == hash_prefix:
+        if is_agent:
+            for jsonl_file in project_dir.glob("*/subagents/agent-*.jsonl"):
+                if agent_hash_from_filename(jsonl_file.name) == hash_prefix:
+                    return jsonl_file
+        else:
+            for jsonl_file in project_dir.glob("*.jsonl"):
+                if get_hash_from_filename(jsonl_file.name) == hash_prefix:
                     return jsonl_file
     return None
 
@@ -723,6 +825,7 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
         "cwd": "",
         "git_branch": "",
         "custom_title": "",
+        "ai_title": "",
         "recap": "",
     }
 
@@ -737,6 +840,13 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
                 # Capture custom title entries (from /rename command)
                 if obj.get("type") == "custom-title":
                     result["custom_title"] = obj.get("customTitle", "")
+                    continue
+
+                # Capture AI-generated title (keep the last one seen)
+                if obj.get("type") == "ai-title":
+                    t = obj.get("aiTitle", "")
+                    if isinstance(t, str) and t.strip():
+                        result["ai_title"] = t.strip()
                     continue
 
                 # Recap: keep the LAST obtainable summary while scanning.
@@ -782,6 +892,22 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
                         for item in content
                     ):
                         continue
+
+                # Skip non-real user messages (caveats, commands, stdout, task
+                # notifications, image-source references): they are not prompts
+                # and must not be counted or used as first_prompt / chat name.
+                check_text = content if isinstance(content, str) else ""
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            check_text = item.get("text", "") or ""
+                            break
+                if (is_caveat_message(check_text)
+                        or is_stdout_message(check_text)
+                        or is_task_notification(check_text)
+                        or parse_command_tags(check_text)
+                        or is_image_source_message(content)):
+                    continue
 
                 result["messages"] += 1
 
@@ -837,6 +963,10 @@ def collect_chats_data(config: dict) -> list[dict]:
     for html_path in output_path.rglob("*.html"):
         if html_path.name == index_filename:
             continue
+        # Auxiliary dashboards (BTW, Audit) are reached from the "+" menu in the
+        # toolbar, not listed as chat rows.
+        if html_path.name == "btw.html" or html_path.name.startswith("CCV-Audit"):
+            continue
 
         parsed = parse_html_filename(html_path.name)
         hash_prefix = parsed["hash"]
@@ -875,6 +1005,8 @@ def collect_chats_data(config: dict) -> list[dict]:
                 # If sessions-index.json lacks customTitle, try JSONL
                 if not meta.get("customTitle") and jsonl_meta.get("custom_title"):
                     name = jsonl_meta["custom_title"]
+                elif name == "Untitled" and jsonl_meta.get("ai_title"):
+                    name = jsonl_meta["ai_title"]
             else:
                 messages = meta.get("messageCount", 0)
                 recap = ""
@@ -930,6 +1062,13 @@ def collect_chats_data(config: dict) -> list[dict]:
                 # Use custom title from JSONL if available (set by /rename)
                 if jsonl_meta["custom_title"]:
                     name = jsonl_meta["custom_title"]
+                elif jsonl_meta.get("ai_title"):
+                    name = jsonl_meta["ai_title"]
+                elif "Agent-" in html_path.name:
+                    # Agent name: "[subagent_type] · [Task description]" from the
+                    # parent session (the agent JSONL has no descriptive title of
+                    # its own); falls back to the invocation prompt.
+                    name = (agent_label(jsonl_file) if jsonl_file else "") or first_prompt or name
 
                 if jsonl_meta["cwd"]:
                     project = format_project_name(jsonl_meta["cwd"])
@@ -971,6 +1110,13 @@ def collect_chats_data(config: dict) -> list[dict]:
         else:
             session_id_full = hash_prefix
 
+        # Agent chats: the subagents/ folder hangs off the invoking session's
+        # UUID, so parent_session links the agent to the chat that launched it.
+        is_agent_chat = "Agent-" in html_path.name
+        parent_session = ""
+        if is_agent_chat and jsonl_file:
+            parent_session = jsonl_file.parent.parent.name
+
         chats_data.append(
             {
                 "session_id": hash_prefix,
@@ -993,11 +1139,33 @@ def collect_chats_data(config: dict) -> list[dict]:
                 "html_size": html_size,
                 "jsonl_path": str(jsonl_file) if jsonl_file else "",
                 "btw_count": btw_counts.get(session_id_full, 0),
+                "is_agent": is_agent_chat,
+                "parent_session": parent_session,
             }
         )
 
-    chats_data.sort(key=lambda x: x["modified_sort"], reverse=True)
-    return chats_data
+    # Flag orphan agents: their invoking chat (parent session) isn't among the
+    # generated chats, so they can't be nested under it. Nesting itself is done
+    # later via parent_session / data-parent.
+    invoker_ids = {c["session_id_full"] for c in chats_data if not c["is_agent"]}
+    for c in chats_data:
+        c["is_orphan_agent"] = c["is_agent"] and c["parent_session"] not in invoker_ids
+
+    # Order: normal chats by recency; each immediately followed by its agents in
+    # invocation order (created asc); orphan agents (no invoker) go last.
+    normals = sorted((c for c in chats_data if not c["is_agent"]),
+                     key=lambda x: x["modified_sort"], reverse=True)
+    agents_by_inv = sorted((c for c in chats_data if c["is_agent"]),
+                           key=lambda x: x["created_sort"])
+    by_parent = {}
+    for ag in agents_by_inv:
+        by_parent.setdefault(ag["parent_session"], []).append(ag)
+    ordered = []
+    for c in normals:
+        ordered.append(c)
+        ordered.extend(by_parent.get(c["session_id_full"], []))
+    ordered.extend(ag for ag in agents_by_inv if ag.get("is_orphan_agent"))
+    return ordered
 
 
 # Physical columns in the dashboard table — keep in sync with its <thead>:
@@ -1041,10 +1209,40 @@ def generate_index(config: dict) -> int:
     short_count = sum(1 for c in chats_data if c["category"] == "Short")
     archived_count = sum(1 for c in chats_data if c["category"] == "Archived")
 
-    # Build table rows
+    # "+" menu: auxiliary dashboards (BTW, Audit) reached from the toolbar instead
+    # of being listed as chat rows.
+    aux_items = []
+    if (output_path / "btw.html").exists():
+        aux_items.append(("btw.html", "BTW queries"))
+    for audit in sorted(output_path.glob("CCV-Audit*.html"), reverse=True):
+        aux_items.append((audit.name, audit.stem))
+    if aux_items:
+        _links = "".join(
+            f'<a href="{escape(n)}">{escape(lbl)}</a>'
+            for n, lbl in aux_items)
+        plus_menu_html = (
+            '<div class="tb-block plus-wrap">'
+            '<button type="button" id="plusBtn" class="tb-btn" '
+            'title="Other views: BTW queries and Audit reports" '
+            'aria-haspopup="true" aria-expanded="false">+</button>'
+            f'<div id="plusMenu" class="plus-menu">{_links}</div></div>'
+        )
+    else:
+        plus_menu_html = ""
+
+    # Build table rows. Orphan agents (no invoker generated) are grouped after a
+    # collapsible header row at the very end.
     rows_html = ""
+    orphan_count = sum(1 for c in chats_data if c.get("is_orphan_agent"))
+    orphan_header_done = False
     for chat in chats_data:
-        link_svg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>'
+        if chat.get("is_orphan_agent") and not orphan_header_done:
+            rows_html += (f'<tr class="orphan-header" data-agent="1"><td colspan="{DASHBOARD_COLS}">'
+                          f'<span class="orphan-tw">&#9654;</span> Orphan agents '
+                          f'<span class="orphan-n">({orphan_count})</span>'
+                          f'<span class="orphan-hint"> &mdash; invoking chat not generated</span></td></tr>\n')
+            orphan_header_done = True
+        link_svg ='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>'
         if chat["html_link"]:
             link_cell = f'<td class="link-cell"><a href="{escape(chat["html_link"])}" title="Open chat">{link_svg}</a></td>'
         else:
@@ -1076,9 +1274,25 @@ def generate_index(config: dict) -> int:
         if fp_txt:
             sub_rows += _sub_row_html("prompt", "First prompt", fp_txt, uuid_full)
 
-        rows_html += f'''<tr data-uuid="{escape(uuid_full)}" data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}" data-jsonl="{escape(chat.get('jsonl_path', ''))}" data-html="{escape(chat['html_link'])}">
+        # Agent chats render as child rows nested under their invoking chat
+        # (data-parent ties them so they stay glued when the table is sorted);
+        # orphans (no invoker found) drop the nesting and are flagged.
+        is_agent = chat.get("is_agent")
+        if is_agent:
+            orphan = chat.get("is_orphan_agent")
+            agent_attr = (f' class="agent-row{" agent-orphan" if orphan else ""}" '
+                          f'data-agent="1" data-parent="{escape(chat.get("parent_session", ""))}"')
+            btitle = ("Agent chat — invoking chat not found (orphan)" if orphan
+                      else "Agent chat (launched by the Task tool)")
+            name_badge = (f'<span class="agent-badge{" agent-badge-orphan" if orphan else ""}" '
+                          f'title="{btitle}">AGENT</span> ')
+        else:
+            agent_attr = ''
+            name_badge = ''
+
+        rows_html += f'''<tr{agent_attr} data-uuid="{escape(uuid_full)}" data-modified="{chat['modified_sort']}" data-created="{chat['created_sort']}" data-messages="{chat['messages']}" data-btw="{btw_n}" data-size="{chat['html_size']}" data-jsonl="{escape(chat.get('jsonl_path', ''))}" data-html="{escape(chat['html_link'])}">
 <td class="hidden-col sel-col"><input type="checkbox" class="sel-box"></td>
-<td class="name-cell" title="{escape(chat['name'])}">{escape(chat['name'])}</td>
+<td class="name-cell" title="{escape(chat['name'])}">{name_badge}{escape(chat['name'])}</td>
 {link_cell}
 <td class="project-cell" title="{escape(chat['project_full'])}">{escape(chat['project'])}</td>
 <td class="category-cell {cat_class}">{escape(chat['category'])}</td>
@@ -1093,7 +1307,10 @@ def generate_index(config: dict) -> int:
 '''
 
     # Build category stats line
+    agent_count = sum(1 for c in chats_data if c.get("is_agent"))
     stats_parts = [f"Total: {total_chats} chats", f"Active: {active_count}"]
+    if agent_count:
+        stats_parts.append(f"Agents: {agent_count}")
     if shorts_enabled:
         stats_parts.append(f"Shorts: {short_count}")
     if archive_enabled:
@@ -1154,6 +1371,25 @@ def generate_index(config: dict) -> int:
             display: flex;
             flex-direction: column;
         }}
+
+        /* Loading overlay: hides the brief jump while the saved state (filters,
+           columns, sort, search) is restored on load; removed once done. */
+        .dash-loading {{
+            position: fixed; inset: 0; z-index: 3000;
+            background: #FFFFFF;
+            display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center;
+            transition: opacity 0.25s ease;
+        }}
+        .dash-loading-msg {{ color: #9AA0A6; font-size: 13px; letter-spacing: 0.2px; }}
+        .dash-loading.hidden {{ opacity: 0; pointer-events: none; }}
+        .dash-loading-spin {{
+            width: 28px; height: 28px;
+            border: 3px solid rgba(0,0,0,0.12);
+            border-top-color: #999;
+            border-radius: 50%;
+            animation: dashSpin 0.7s linear infinite;
+        }}
+        @keyframes dashSpin {{ to {{ transform: rotate(360deg); }} }}
 
         .header {{
             background: #2D2D30;
@@ -1245,12 +1481,43 @@ def generate_index(config: dict) -> int:
         .toolbar {{
             background: #FAFAFA;
             border-bottom: 1px solid #E0E0E0;
-            padding: 12px 20px;
+            padding: 6px 20px;
             display: flex;
-            gap: 15px;
             align-items: center;
+            justify-content: center;
             flex-wrap: wrap;
+            row-gap: 4px;
         }}
+        .tb-block {{
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+            padding: 2px 16px;
+            border-left: 1px solid #E2E2E2;
+        }}
+        .tb-block:first-child {{ padding-left: 0; border-left: none; }}
+        /* First block of each (wrapped) line drops its separator — set by JS. */
+        .tb-block.tb-rowstart {{ border-left: none; }}
+        #clearBtn {{ margin-left: 8px; }}
+        /* Responsive line-break helpers: invisible flex items that force a wrap
+           at each breakpoint. Salto 1: buttons | filter+columns. Salto 2: + filter | columns. */
+        .tb-break {{ display: none; flex-basis: 100%; height: 0; }}
+        @media (max-width: 1000px) {{ .tb-break-1 {{ display: block; }} }}
+        @media (max-width: 680px) {{ .tb-break-2 {{ display: block; }} }}
+        .search-row {{
+            display: none;
+            background: #FAFAFA;
+            border-bottom: 1px solid #E0E0E0;
+            padding: 10px 20px;
+            gap: 12px;
+            align-items: center;
+        }}
+        .search-row.open {{ display: flex; }}
+        .scope-check {{ display: flex; align-items: center; gap: 6px; font-size: 12px; color: #333333; white-space: nowrap; cursor: pointer; }}
+        .search-row .search-input,
+        .search-row .exclude-input {{ flex: 0 1 320px; width: auto; min-width: 0; }}
 
         .search-input {{
             padding: 6px 12px;
@@ -1265,6 +1532,8 @@ def generate_index(config: dict) -> int:
             outline: none;
             border-color: #007ACC;
         }}
+
+        .group-label {{ font-weight: 600; color: #333333; }}
 
         .exclude-input {{
             padding: 6px 12px;
@@ -1299,7 +1568,6 @@ def generate_index(config: dict) -> int:
             display: flex;
             gap: 8px;
             align-items: center;
-            margin-left: auto;
         }}
 
         .columns-toggle label {{
@@ -1350,8 +1618,13 @@ def generate_index(config: dict) -> int:
             visibility: visible;
         }}
 
+        /* The breathing space above the table is a margin (OUTSIDE the scroll
+           area) — white from the page — so rows can't scroll through it and the
+           sticky thead pins flush to the top edge with nothing peeking above. */
         .table-container {{
-            padding: 15px 20px;
+            padding: 0 16px 16px;
+            margin-top: 14px;
+            background: #FFFFFF;
             flex: 1;
             min-width: 0;
             overflow-y: scroll;
@@ -1384,6 +1657,10 @@ def generate_index(config: dict) -> int:
             cursor: pointer;
             user-select: none;
             white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            box-shadow: inset 0 -1px 0 #E0E0E0;
         }}
 
         th:hover {{ background: #E8E8E8; }}
@@ -1487,9 +1764,63 @@ def generate_index(config: dict) -> int:
         .sub-prompt .sub-details summary::before {{ color: #1E6FBF; }}
         .columns-toggle input[data-sub="recap"] {{ accent-color: #8B4FD6; }}
         .columns-toggle input[data-sub="prompt"] {{ accent-color: #1E6FBF; }}
+
+        /* Agent chats */
+        .agent-badge {{
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #FFFFFF;
+            background: #2D6E6E;
+            padding: 1px 5px;
+            border-radius: 3px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }}
+        /* Agents hang under their invoking chat with a subtle tree connector
+           "└─" (replaces the old vertical rail) — reads as "comes from above". */
+        tr.agent-row .name-cell {{ padding-left: 6px; }}
+        tr.agent-row .name-cell::before {{
+            content: "└─";
+            color: #9CB8B8;
+            margin: 0 6px 0 2px;
+            font-family: 'Cascadia Code', 'Consolas', monospace;
+        }}
+        .agent-badge-orphan {{ background: #6B7280; }}
+        /* Orphan agents: collapsible group at the end (header row + orphan rows). */
+        .orphan-header td {{
+            background: #F3F4F6; color: #6B7280; font-weight: 600; font-size: 11px;
+            cursor: pointer; user-select: none; padding: 6px 12px;
+            box-shadow: inset 3px 0 0 #9CA3AF;
+        }}
+        .orphan-header:hover td {{ background: #ECEEF1; }}
+        .orphan-tw {{ display: inline-block; transition: transform 0.15s; color: #9CA3AF; margin-right: 4px; }}
+        .orphan-header.open .orphan-tw {{ transform: rotate(90deg); }}
+        .orphan-n {{ color: #9CA3AF; font-weight: 400; }}
+        .orphan-hint {{ color: #B0B4BB; font-weight: 400; font-style: italic; }}
+
+        /* "+" menu (BTW / Audit dashboards) */
+        .plus-wrap {{ position: relative; }}
+        .plus-menu {{
+            display: none; position: absolute; top: 100%; left: 0; margin-top: 4px;
+            background: #FFFFFF; border: 1px solid #D0D0D0; border-radius: 6px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.15); z-index: 100; min-width: 170px; padding: 4px;
+        }}
+        .plus-menu.open {{ display: block; }}
+        .plus-menu a {{
+            display: block; padding: 6px 10px; color: #1E1E1E; text-decoration: none;
+            border-radius: 4px; font-size: 12px; white-space: nowrap;
+        }}
+        .plus-menu a:hover {{ background: #F0F0F0; }}
+        /* Every data row stays on a single line (the Recap/First-prompt sub-rows
+           are the only multi-line rows). */
+        #chatsTable tbody tr:not(.sub-row) td {{ white-space: nowrap; }}
         /* Toggle labels: normal by default, bold + accent color when checked */
         .columns-toggle label:has(input[data-sub="recap"]:checked) {{ color: #8B4FD6; font-weight: 600; }}
         .columns-toggle label:has(input[data-sub="prompt"]:checked) {{ color: #1E6FBF; font-weight: 600; }}
+        .columns-toggle input#agentsToggle {{ accent-color: #2D6E6E; }}
+        .columns-toggle label:has(#agentsToggle:checked) {{ color: #2D6E6E; font-weight: 600; }}
         .sub-details summary {{
             cursor: pointer;
             list-style: none;
@@ -1552,15 +1883,11 @@ def generate_index(config: dict) -> int:
         .tb-btn.danger {{ border-color: #D9534F; color: #C0392B; }}
         .tb-btn.danger:not(:disabled):hover {{ background: #FDECEA; }}
         .tb-btn:disabled {{ opacity: 0.45; cursor: default; }}
-        /* Compact equal-width toolbar buttons; Delete keeps its slot
-           reserved (visibility) so Select never shifts */
-        #deleteBtn, #selectModeBtn {{
-            width: 84px;
-            padding: 3px 6px;
+        #deleteBtn, #selectModeBtn, #searchToggle, #clearBtn {{
+            padding: 3px 14px;
             text-align: center;
         }}
-        #deleteBtn {{ visibility: hidden; margin-left: 14px; }}
-        #deleteBtn.shown {{ visibility: visible; }}
+        #searchToggle.active {{ background: #E8E8E8; border-color: #999; }}
         .sel-col input {{ cursor: pointer; width: 13px; height: 13px; }}
         body.select-mode #chatsTable tbody tr:not(.sub-row) {{ cursor: pointer; }}
 
@@ -1656,6 +1983,7 @@ def generate_index(config: dict) -> int:
     </style>
 </head>
 <body>
+    <div id="dashLoading" class="dash-loading"><div class="dash-loading-spin"></div><div class="dash-loading-msg">Loading your chats… hang tight!</div></div>
     <div class="header">
         <div class="header-title">
             <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
@@ -1679,11 +2007,17 @@ def generate_index(config: dict) -> int:
     </div>
 
     <div class="toolbar">
-        <input type="text" class="search-input" id="searchInput" placeholder="Filter by name, project...">
-        <input type="text" class="exclude-input" id="excludeInput" placeholder="Exclude...">
-
-        <div class="filter-group">
-            <span>Filter:</span>
+        <div class="tb-block">
+            <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
+            <button id="deleteBtn" class="tb-btn danger" disabled>Delete</button>
+        </div>
+        <div class="tb-block">
+            <button type="button" id="searchToggle" class="tb-btn" aria-pressed="false">Search</button>
+            <button type="button" id="clearBtn" class="tb-btn" title="Reset all options: filters, columns, selection, search">Clear</button>
+        </div>
+        <i class="tb-break tb-break-1"></i>
+        <div class="tb-block filter-group">
+            <span class="group-label">Filter:</span>
             {filter_checkboxes}
             <span class="tooltip">
                 <span class="help-icon">?</span>
@@ -1693,17 +2027,25 @@ def generate_index(config: dict) -> int:
                 </span>
             </span>
         </div>
-
-        <div class="columns-toggle">
-            <span>Columns:</span>
-            <label><input type="checkbox" data-col="btw-col"> BTW</label>
-            <label><input type="checkbox" data-col="branch-col"> Branch</label>
-            <label><input type="checkbox" data-col="size-col"> Size</label>
+        <i class="tb-break tb-break-2"></i>
+        <div class="tb-block columns-toggle">
+            <span class="group-label">View:</span>
+            <label><input type="checkbox" id="agentsToggle" title="Show agent chats (sub-chats launched by the Task tool), nested under their invoker"> Agents</label>
             <label><input type="checkbox" data-sub="recap"> Recap</label>
             <label><input type="checkbox" data-sub="prompt"> First prompt</label>
-            <button id="deleteBtn" class="tb-btn danger" disabled>Delete</button>
-            <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
         </div>
+        {plus_menu_html}
+        <div class="tb-block columns-toggle">
+            <span class="group-label">Columns:</span>
+            <label><input type="checkbox" data-col="branch-col"> Branch</label>
+            <label><input type="checkbox" data-col="size-col"> Size</label>
+        </div>
+    </div>
+
+    <div class="search-row" id="searchRow">
+        <label class="scope-check"><input type="checkbox" id="searchScopeNames" checked> Search names only</label>
+        <input type="text" class="search-input" id="searchInput" placeholder="Search by name, project..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <input type="text" class="exclude-input" id="excludeInput" placeholder="Exclude..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
     </div>
 
     <div class="modal-overlay" id="deleteModal">
@@ -1737,7 +2079,7 @@ def generate_index(config: dict) -> int:
                     <th data-sort="category" data-width="95">Category</th>
                     <th data-sort="created" data-width="160">Created</th>
                     <th data-sort="modified" class="sorted-desc" data-width="160">Last Used</th>
-                    <th data-sort="messages" data-width="64">Msgs</th>
+                    <th data-sort="messages" data-width="64" title="Turns: one full assistant response (its text and tools) counts as 1 message. Counted the same across all chats.">Msgs</th>
                     <th class="uuid-col" data-sort="uuid" data-width="140">UUID</th>
                     <th class="hidden-col btw-col" data-sort="btw" data-width="64">BTW</th>
                     <th class="hidden-col branch-col" data-sort="branch" data-width="130">Branch</th>
@@ -1765,6 +2107,8 @@ def generate_index(config: dict) -> int:
                 sort: currentSort,
                 search: document.getElementById('searchInput').value,
                 exclude: document.getElementById('excludeInput').value,
+                searchNamesOnly: document.getElementById('searchScopeNames').checked,
+                searchActive: document.getElementById('searchToggle').classList.contains('active'),
                 filters: {{}},
                 columns: {{}}
             }};
@@ -1784,6 +2128,8 @@ def generate_index(config: dict) -> int:
             }});
             state.delTab = delTab;
             state.delMode = document.getElementById('delPermanent').checked;
+            state.selectMode = selectMode;
+            state.showAgents = showAgents;
             localStorage.setItem(STATE_KEY, JSON.stringify(state));
         }}
 
@@ -1820,8 +2166,7 @@ def generate_index(config: dict) -> int:
 
         function sortTable(col, dir) {{
             const tbody = document.querySelector('#chatsTable tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr:not(.sub-row)'));
-            rows.sort((a, b) => {{
+            const cmp = (a, b) => {{
                 let aVal, bVal;
                 if (col === 'modified' || col === 'created') {{
                     aVal = parseFloat(a.dataset[col]) || 0;
@@ -1840,16 +2185,26 @@ def generate_index(config: dict) -> int:
                     aVal = (a.cells[colIndex]?.textContent || '').trim().toLowerCase();
                     bVal = (b.cells[colIndex]?.textContent || '').trim().toLowerCase();
                 }}
-                if (typeof aVal === 'number') {{
-                    return dir === 'asc' ? aVal - bVal : bVal - aVal;
-                }}
+                if (typeof aVal === 'number') return dir === 'asc' ? aVal - bVal : bVal - aVal;
                 return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-            }});
-            /* Sub-rows travel glued to their parent row */
-            rows.forEach(row => {{
+            }};
+            // Only root chats are sorted. Agents stay glued under their invoker
+            // (in invocation order); orphan agents are appended last. Every row
+            // drags its own sub-rows (Recap / First prompt).
+            const place = row => {{
                 tbody.appendChild(row);
                 (subRowsOf[row.dataset.uuid] || []).forEach(sr => tbody.appendChild(sr));
+            }};
+            const roots = Array.from(tbody.querySelectorAll('tr:not(.sub-row):not(.agent-row):not(.orphan-header)'));
+            roots.sort(cmp);
+            roots.forEach(row => {{
+                place(row);
+                (agentRowsOf[row.dataset.uuid] || []).forEach(place);
             }});
+            // Orphan group last: header, then the orphan rows sorted like the rest.
+            const orphanHeader = tbody.querySelector('.orphan-header');
+            if (orphanHeader) tbody.appendChild(orphanHeader);
+            Array.from(tbody.querySelectorAll('tr.agent-orphan')).sort(cmp).forEach(place);
         }}
 
         /* Sub-rows (Recap / First prompt): index by parent, searchable text */
@@ -1863,6 +2218,13 @@ def generate_index(config: dict) -> int:
             const p = sr.dataset.parent;
             (subRowsOf[p] = subRowsOf[p] || []).push(sr);
             subTextOf[p] = (subTextOf[p] || '') + ' ' + sr.textContent.toLowerCase();
+        }});
+        /* Agent rows indexed by their invoking chat's UUID, so they stay glued
+           under it when the table is re-sorted (orphans handled separately). */
+        const agentRowsOf = {{}};
+        document.querySelectorAll('#chatsTable tbody tr.agent-row:not(.agent-orphan)').forEach(ar => {{
+            const p = ar.dataset.parent;
+            (agentRowsOf[p] = agentRowsOf[p] || []).push(ar);
         }});
 
         /* A sub-row is visible when its type toggle is on AND its parent row
@@ -1889,7 +2251,41 @@ def generate_index(config: dict) -> int:
 
         /* ---- Select & Delete mode ---- */
         let selectMode = false;
+        let showAgents = false;
+        let orphansOpen = false;
         const selectBtn = document.getElementById('selectModeBtn');
+        const agentsBtn = document.getElementById('agentsToggle');
+        if (agentsBtn) {{
+            agentsBtn.addEventListener('change', () => {{
+                showAgents = agentsBtn.checked;
+                if (!showAgents) {{ orphansOpen = false; document.querySelectorAll('.orphan-header').forEach(o => o.classList.remove('open')); }}
+                filterTable();
+                saveState();
+            }});
+        }}
+
+        // Orphan-agents group toggle (collapsed by default, not persisted).
+        document.querySelectorAll('#chatsTable .orphan-header').forEach(oh => {{
+            oh.addEventListener('click', () => {{
+                orphansOpen = !orphansOpen;
+                oh.classList.toggle('open', orphansOpen);
+                filterTable();
+            }});
+        }});
+
+        const plusBtn = document.getElementById('plusBtn');
+        const plusMenu = document.getElementById('plusMenu');
+        if (plusBtn && plusMenu) {{
+            plusBtn.addEventListener('click', e => {{
+                e.stopPropagation();
+                const open = plusMenu.classList.toggle('open');
+                plusBtn.setAttribute('aria-expanded', open);
+            }});
+            document.addEventListener('click', () => {{
+                plusMenu.classList.remove('open');
+                plusBtn.setAttribute('aria-expanded', 'false');
+            }});
+        }}
         const deleteBtn = document.getElementById('deleteBtn');
         const selAll = document.getElementById('selAll');
         const delModal = document.getElementById('deleteModal');
@@ -1897,7 +2293,9 @@ def generate_index(config: dict) -> int:
         let delFiles = [];
 
         function selectedRows() {{
-            return Array.from(document.querySelectorAll('#chatsTable tbody .sel-box:checked'))
+            // Only marked AND visible rows — never hidden ones (filtered out or
+            // agents toggled off), so deletion can never silently include them.
+            return Array.from(document.querySelectorAll('#chatsTable tbody tr:not(.sub-row):not(.hidden-row) .sel-box:checked'))
                 .map(cb => cb.closest('tr'));
         }}
 
@@ -1914,7 +2312,6 @@ def generate_index(config: dict) -> int:
         selectBtn.addEventListener('click', () => {{
             selectMode = !selectMode;
             selectBtn.classList.toggle('active', selectMode);
-            deleteBtn.classList.toggle('shown', selectMode);
             document.body.classList.toggle('select-mode', selectMode);
             document.querySelectorAll('.sel-col').forEach(el => el.classList.toggle('hidden-col', !selectMode));
             if (!selectMode) {{
@@ -1922,6 +2319,7 @@ def generate_index(config: dict) -> int:
             }}
             syncColumnWidths();
             refreshDeleteUI();
+            saveState();
         }});
 
         /* In select mode, clicking anywhere on a row toggles its checkbox
@@ -2047,22 +2445,89 @@ def generate_index(config: dict) -> int:
         /* Search and filter */
         document.getElementById('searchInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
         document.getElementById('excludeInput').addEventListener('input', () => {{ filterTable(); saveState(); }});
+        function updateScopePlaceholder() {{
+            const el = document.getElementById('searchScopeNames');
+            const input = document.getElementById('searchInput');
+            if (el && el.checked) {{ input.placeholder = 'Search by name...'; return; }}
+            // Use the long hint only if the input is wide enough; else "Search...".
+            // Falls back to viewport width when the row is hidden (clientWidth 0).
+            const w = input.clientWidth;
+            const narrow = w > 0 ? w < 300 : window.innerWidth <= 800;
+            input.placeholder = narrow ? 'Search...' : 'Search by name, project, content...';
+        }}
+        document.getElementById('searchScopeNames').addEventListener('change', () => {{ updateScopePlaceholder(); filterTable(); saveState(); }});
+        updateScopePlaceholder();
+        function setSearchActive(active) {{
+            document.getElementById('searchRow').classList.toggle('open', active);
+            const btn = document.getElementById('searchToggle');
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+            filterTable();
+            updateScopePlaceholder();
+        }}
+        document.getElementById('searchToggle').addEventListener('click', () => {{
+            setSearchActive(!document.getElementById('searchToggle').classList.contains('active'));
+            saveState();
+        }});
+        document.getElementById('clearBtn').addEventListener('click', () => {{
+            localStorage.removeItem(STATE_KEY);
+            location.reload();
+        }});
+        /* Hide the left separator of any toolbar block that is the first on its
+           line (forced or natural wrap), so a wrapped block never shows a
+           dangling separator. Robust at any width. */
+        function syncToolbarSeparators() {{
+            var blocks = Array.from(document.querySelectorAll('.toolbar .tb-block'));
+            var prevTop = null;
+            blocks.forEach(function(b) {{
+                var top = b.offsetTop;
+                b.classList.toggle('tb-rowstart', prevTop === null || Math.abs(top - prevTop) > 2);
+                prevTop = top;
+            }});
+        }}
+        window.addEventListener('resize', () => {{ syncToolbarSeparators(); updateScopePlaceholder(); }});
+        syncToolbarSeparators();
         {filter_js_listeners}
 
         function filterTable() {{
-            const search = document.getElementById('searchInput').value.toLowerCase();
-            const exclude = document.getElementById('excludeInput').value.toLowerCase();
+            const searchActive = document.getElementById('searchToggle').classList.contains('active');
+            const search = searchActive ? document.getElementById('searchInput').value.toLowerCase() : '';
+            const exclude = searchActive ? document.getElementById('excludeInput').value.toLowerCase() : '';
+            const scopeEl = document.getElementById('searchScopeNames');
+            const namesOnly = scopeEl ? scopeEl.checked : true;
             {filter_js_vars}
 
             document.querySelectorAll('#chatsTable tbody tr').forEach(row => {{
                 if (row.classList.contains('sub-row')) return;
-                const text = row.textContent.toLowerCase() + (subTextOf[row.dataset.uuid] || '');
+                const nameCell = row.querySelector('.name-cell');
+                const text = namesOnly
+                    ? (nameCell ? nameCell.textContent.toLowerCase() : '')
+                    : row.textContent.toLowerCase() + (subTextOf[row.dataset.uuid] || '');
                 const category = row.querySelector('.category-cell')?.textContent || '';
                 const matchesSearch = !search || text.includes(search);
                 const matchesExclude = !exclude || !text.includes(exclude);
                 const matchesFilter =
                     {filter_js_conditions};
-                row.classList.toggle('hidden-row', !(matchesSearch && matchesExclude && matchesFilter));
+                if (row.classList.contains('orphan-header')) {{
+                    // Header shows only when Agents is on (no search/filter applies).
+                    row.classList.toggle('hidden-row', !showAgents);
+                    return;
+                }}
+                if (row.classList.contains('agent-orphan')) {{
+                    // Orphans are a separate group at the end, opened on purpose:
+                    // show them when the group is open + Agents on + they match the
+                    // search, REGARDLESS of the Active/Archived filter (orphans are
+                    // usually old/Archived, which would otherwise hide them all).
+                    const ok = orphansOpen && showAgents && matchesSearch && matchesExclude;
+                    row.classList.toggle('hidden-row', !ok);
+                    if (!ok) {{ const sb = row.querySelector('.sel-box'); if (sb && sb.checked) sb.checked = false; }}
+                    return;
+                }}
+                const matchesAgents = showAgents || row.dataset.agent !== '1';
+                const hide = !(matchesSearch && matchesExclude && matchesFilter && matchesAgents);
+                row.classList.toggle('hidden-row', hide);
+                // Never keep a hidden row selected (safety against deleting unseen chats).
+                if (hide) {{ const sb = row.querySelector('.sel-box'); if (sb && sb.checked) sb.checked = false; }}
             }});
             syncSubRows();
             refreshDeleteUI();
@@ -2103,6 +2568,9 @@ def generate_index(config: dict) -> int:
         if (saved) {{
             if (saved.search) document.getElementById('searchInput').value = saved.search;
             if (saved.exclude) document.getElementById('excludeInput').value = saved.exclude;
+            if (typeof saved.searchNamesOnly === 'boolean') document.getElementById('searchScopeNames').checked = saved.searchNamesOnly;
+            if (saved.searchActive) setSearchActive(true);
+            updateScopePlaceholder();
             Object.entries(saved.filters || {{}}).forEach(([id, checked]) => {{
                 const el = document.getElementById(id);
                 if (el) el.checked = checked;
@@ -2127,6 +2595,14 @@ def generate_index(config: dict) -> int:
             }});
             if (saved.delTab) delTab = saved.delTab;
             if (saved.delMode) document.getElementById('delPermanent').checked = true;
+            // Restore the Select mode (column visible); the individual delete
+            // marks are intentionally NOT persisted (transient, avoids accidental
+            // deletes after a refresh).
+            if (saved.selectMode) selectBtn.click();
+            if (saved.showAgents && agentsBtn) {{
+                showAgents = true;
+                agentsBtn.checked = true;
+            }}
             if (saved.sort) {{
                 currentSort = saved.sort;
                 document.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
@@ -2139,6 +2615,12 @@ def generate_index(config: dict) -> int:
         document.querySelectorAll('.del-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === delTab));
         syncColumnWidths();
         filterTable();
+
+        // State restored — drop the loading overlay after layout settles.
+        window.addEventListener('load', function() {{
+            var ld = document.getElementById('dashLoading');
+            if (ld) {{ ld.classList.add('hidden'); setTimeout(function() {{ ld.remove(); }}, 300); }}
+        }});
 
         /* Copy UUID to clipboard */
         function copyUuid(btn) {{
@@ -2230,7 +2712,11 @@ def _resolve_session_meta(
             title = resolve_chat_title(jsonl_file, sessions_meta)
         except Exception:
             pass
-        project = format_project_name(jsonl_file.parent.name)
+        try:
+            cwd = extract_jsonl_metadata(jsonl_file).get("cwd", "")
+        except Exception:
+            cwd = ""
+        project = format_project_name(cwd) if cwd else format_project_name(jsonl_file.parent.name)
         # Try to locate the generated HTML
         hash_prefix = get_hash_from_filename(jsonl_file.name)
         existing = find_existing_html(output_path, hash_prefix)
@@ -2370,8 +2856,10 @@ def generate_btw_view(config: dict) -> Path | None:
             color: #1E1E1E;
             font-size: 12px;
             line-height: 1.45;
+            margin: 0;
             display: flex;
             flex-direction: column;
+            min-height: 100vh;
         }}
         .btw-header {{
             background: #2D2D30;
@@ -2437,6 +2925,7 @@ def generate_btw_view(config: dict) -> Path | None:
             max-width: 1200px;
             margin: 0 auto;
             width: 100%;
+            flex: 1;
         }}
         .btw-session {{
             background: #FFFFFF;
@@ -2556,7 +3045,7 @@ def generate_btw_view(config: dict) -> Path | None:
 
     <div class="btw-toolbar">
         <input type="text" class="btw-search" id="btwSearch"
-               placeholder="Filter by query text, chat title or project..." autofocus>
+               placeholder="Filter by query text, chat title or project..." autofocus autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <button class="btw-tbtn" id="btwToggleAll" title="Expand / collapse all chats">▶ Expand all</button>
     </div>
 
@@ -2621,6 +3110,478 @@ def generate_btw_view(config: dict) -> Path | None:
     return output_file
 
 
+def _audit_object(obj, chat_name: str, findings: dict):
+    """Inspect one JSONL object and accumulate anomalies into `findings`."""
+    if not isinstance(obj, dict):
+        return
+
+    mtype = obj.get("type", "")
+    findings["message_type_counts"][mtype] = findings["message_type_counts"].get(mtype, 0) + 1
+    if mtype and mtype not in KNOWN_MESSAGE_TYPES and mtype not in KNOWN_METADATA_TYPES:
+        slot = findings["unknown_message_types"].setdefault(mtype, {"count": 0, "chats": set()})
+        slot["count"] += 1
+        slot["chats"].add(chat_name)
+
+    message = obj.get("message")
+    if not isinstance(message, dict):
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        ctype = item.get("type", "")
+        findings["content_type_counts"][ctype] = findings["content_type_counts"].get(ctype, 0) + 1
+        if ctype and ctype not in KNOWN_CONTENT_TYPES:
+            slot = findings["unknown_content_types"].setdefault(ctype, {"count": 0, "chats": set()})
+            slot["count"] += 1
+            slot["chats"].add(chat_name)
+        if ctype == "thinking" and not (item.get("thinking") or "").strip():
+            findings["empty_thinking"]["count"] += 1
+            findings["empty_thinking"]["chats"].add(chat_name)
+        if ctype == "text" and not (item.get("text") or "").strip():
+            findings["empty_text"]["count"] += 1
+            findings["empty_text"]["chats"].add(chat_name)
+        if ctype == "tool_use":
+            tname = item.get("name", "")
+            if tname:
+                findings["tool_names"][tname] = findings["tool_names"].get(tname, 0) + 1
+
+
+def audit_chats(config: dict, scan_count="50") -> dict:
+    """Scan the most recent JSONL files for format anomalies (read-only).
+
+    `scan_count` is an int-like (the N most recent by mtime) or "all". Returns a
+    structured findings dict consumed by generate_audit_view. Never writes.
+    """
+    source_path = config["_resolved"]["source_path"]
+
+    files = []
+    for project_dir in source_path.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            files.append(jsonl_file)
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    scan_all = str(scan_count).lower() == "all"
+    if not scan_all:
+        try:
+            n = int(scan_count)
+        except (TypeError, ValueError):
+            n = 50
+        files = files[: max(0, n)]
+
+    findings = {
+        "scanned": 0,
+        "scan_all": scan_all,
+        "unknown_message_types": {},
+        "unknown_content_types": {},
+        "empty_thinking": {"count": 0, "chats": set()},
+        "empty_text": {"count": 0, "chats": set()},
+        "parse_errors": [],
+        "message_type_counts": {},
+        "content_type_counts": {},
+        "tool_names": {},
+    }
+
+    for jsonl_file in files:
+        findings["scanned"] += 1
+        chat_name = jsonl_file.name
+        try:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        findings["parse_errors"].append({"chat": chat_name, "line": line_num})
+                        continue
+                    _audit_object(obj, chat_name, findings)
+        except OSError:
+            continue
+
+    return findings
+
+
+def _audit_has_findings(findings: dict) -> bool:
+    """True if there is any actionable anomaly (excludes the plain summary)."""
+    return bool(
+        findings["unknown_message_types"]
+        or findings["unknown_content_types"]
+        or findings["empty_thinking"]["count"]
+        or findings["empty_text"]["count"]
+        or findings["parse_errors"]
+    )
+
+
+def _audit_section(css: str, title: str, intro: str, items_html: str) -> str:
+    return (
+        f'<section class="audit-section audit-{css}">'
+        f'<h2 class="audit-title">{title}</h2>'
+        f'<p class="audit-intro">{intro}</p>'
+        f'<ul class="audit-list">{items_html}</ul>'
+        f'</section>'
+    )
+
+
+def generate_audit_view(config: dict, scan_count="50"):
+    """Generate an HTML format-audit report next to the dashboard.
+
+    Returns (path, findings). The report is always written (even with zero
+    findings, to confirm "all clear"). Read-only over the JSONL files.
+    """
+    output_path = config["_resolved"]["output_path"]
+    index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
+
+    findings = audit_chats(config, scan_count)
+    scope = "all chats" if findings["scan_all"] else f"{findings['scanned']} most recent chats"
+
+    sections = []
+
+    # 1. Possible format changes
+    fmt_rows = []
+    for t, d in sorted(findings["unknown_message_types"].items(), key=lambda kv: -kv[1]["count"]):
+        fmt_rows.append(("message type", t, d["count"], len(d["chats"])))
+    for t, d in sorted(findings["unknown_content_types"].items(), key=lambda kv: -kv[1]["count"]):
+        fmt_rows.append(("content type", t, d["count"], len(d["chats"])))
+    if fmt_rows:
+        items = "".join(
+            f'<li><code>{escape(t)}</code> <span class="audit-kind">({kind})</span> — '
+            f'{count} occurrence(s) across {chats} chat(s). CCV shows it as a generic block.</li>'
+            for kind, t, count, chats in fmt_rows
+        )
+        sections.append(_audit_section(
+            "format", "🆕 Possible format changes",
+            "Types not in CCV&#39;s known schema. This may be something new introduced by "
+            "Claude Code. If any should render in a specific way, please report it.", items))
+
+    # 2. Possibly dropped content
+    drop_items = []
+    if findings["empty_thinking"]["count"]:
+        drop_items.append(
+            f'<li><code>thinking</code> — {findings["empty_thinking"]["count"]} empty block(s) '
+            f'across {len(findings["empty_thinking"]["chats"])} chat(s).</li>')
+    if findings["empty_text"]["count"]:
+        drop_items.append(
+            f'<li><code>text</code> — {findings["empty_text"]["count"]} empty block(s) '
+            f'across {len(findings["empty_text"]["chats"])} chat(s).</li>')
+    if drop_items:
+        sections.append(_audit_section(
+            "dropped", "⚠️ Possibly dropped content",
+            "Empty blocks that normally carry text. These may be content the Claude Code "
+            "client did not persist (a known pattern) — not a CCV fault. The text itself is "
+            "not in the JSONL, so it cannot be recovered.", "".join(drop_items)))
+
+    # 3. Unexpected errors
+    if findings["parse_errors"]:
+        shown = findings["parse_errors"][:50]
+        err_items = "".join(
+            f'<li><code>{escape(e["chat"])}</code> — line {e["line"]} is not valid JSON.</li>'
+            for e in shown)
+        extra = ""
+        if len(findings["parse_errors"]) > len(shown):
+            extra = f'<li>… and {len(findings["parse_errors"]) - len(shown)} more.</li>'
+        sections.append(_audit_section(
+            "error", "🔴 Unexpected errors",
+            "Lines that could not be parsed as JSON. Possible corruption or truncation of the "
+            "source file.", err_items + extra))
+
+    # 4. Summary (always present)
+    def _counts_list(counts):
+        return "".join(
+            f'<li><code>{escape(str(k) or "(none)")}</code> — {v}</li>'
+            for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    summary_items = (
+        f'<li><strong>Scope:</strong> {escape(scope)}</li>'
+        f'<li><strong>Message types seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["message_type_counts"])}</ul>'
+        f'<li><strong>Content types seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["content_type_counts"])}</ul>'
+        f'<li><strong>Tools seen:</strong></li>'
+        f'<ul class="audit-sublist">{_counts_list(findings["tool_names"]) or "<li>(none)</li>"}</ul>'
+    )
+    sections.append(_audit_section("summary", "📊 Summary", "What was scanned and seen.", summary_items))
+
+    has_findings = _audit_has_findings(findings)
+    copy_btn = ('<span class="audit-arrow" aria-hidden="true">&rarr;</span>'
+                '<button type="button" class="audit-copy" onclick="copyAuditReport()">'
+                'Copy report</button>')
+    if has_findings:
+        banner = (
+            '<div class="audit-banner audit-banner-warn">'
+            '<span class="audit-banner-text">Some items were flagged below. If you think any of '
+            'them should be fixed, <a href="https://github.com/oskar-gm/code-chat-viewer/issues" '
+            'target="_blank" rel="noopener">open an issue on GitHub</a>.</span>'
+            f'{copy_btn}</div>'
+        )
+    else:
+        banner = (
+            '<div class="audit-banner audit-banner-ok">'
+            '<span class="audit-banner-text">All clear — everything scanned matches CCV&#39;s known '
+            'schema, with no empty blocks or parse errors.</span>'
+            f'{copy_btn}</div>'
+        )
+
+    sections_block = "\n".join(sections)
+    gen_time = _fmt_dt(datetime.now(), config["time_format"])
+
+    # Plain-text version of the report, for the Copy button (e.g. to paste in an issue).
+    plain_lines = [
+        "Code Chat Viewer - Format Audit",
+        f"Scope: {scope}",
+        f"Generated: {gen_time}",
+        "",
+    ]
+    if fmt_rows:
+        plain_lines.append("== Possible format changes ==")
+        plain_lines += [f"- {t} ({kind}): {count} occurrence(s) across {chats} chat(s)"
+                        for kind, t, count, chats in fmt_rows]
+        plain_lines.append("")
+    if findings["empty_thinking"]["count"] or findings["empty_text"]["count"]:
+        plain_lines.append("== Possibly dropped content ==")
+        if findings["empty_thinking"]["count"]:
+            plain_lines.append(f"- thinking: {findings['empty_thinking']['count']} empty block(s) "
+                               f"across {len(findings['empty_thinking']['chats'])} chat(s)")
+        if findings["empty_text"]["count"]:
+            plain_lines.append(f"- text: {findings['empty_text']['count']} empty block(s) "
+                               f"across {len(findings['empty_text']['chats'])} chat(s)")
+        plain_lines.append("")
+    if findings["parse_errors"]:
+        plain_lines.append("== Unexpected errors ==")
+        plain_lines += [f"- {e['chat']}: line {e['line']} is not valid JSON"
+                        for e in findings["parse_errors"][:50]]
+        plain_lines.append("")
+    plain_lines.append("== Summary ==")
+    plain_lines.append("Message types seen: " + ", ".join(
+        f"{k or '(none)'}={v}" for k, v in sorted(findings["message_type_counts"].items(), key=lambda kv: -kv[1])))
+    plain_lines.append("Content types seen: " + ", ".join(
+        f"{k or '(none)'}={v}" for k, v in sorted(findings["content_type_counts"].items(), key=lambda kv: -kv[1])))
+    plain_lines.append("Tools seen: " + (", ".join(
+        f"{k}={v}" for k, v in sorted(findings["tool_names"].items(), key=lambda kv: -kv[1])) or "(none)"))
+    plain_report = "\n".join(plain_lines)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="Code Chat Viewer v{APP_VERSION} — Format Audit">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{ICON_FAVICON_BASE64}">
+    <title>Code Chat Viewer — Format Audit</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: #FFFFFF; color: #1E1E1E; font-size: 12px; line-height: 1.5;
+        }}
+        .audit-header {{
+            background: #2D2D30; color: #CCCCCC; padding: 8px 16px;
+            display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            font-size: 12px;
+        }}
+        .audit-header-title {{ display: flex; align-items: center; gap: 8px; font-weight: 600; }}
+        .audit-header-title img {{ height: 14px; width: 14px; }}
+        .audit-header a {{ color: #7EC8F0; text-decoration: none; font-size: 11px; }}
+        .audit-header a:hover {{ text-decoration: underline; }}
+        .audit-copy {{
+            flex-shrink: 0;
+            background: #2D2D30; color: #FFFFFF; border: none;
+            border-radius: 4px; padding: 5px 14px; font-family: inherit;
+            font-size: 11px; font-weight: 600; cursor: pointer;
+        }}
+        .audit-copy:hover {{ background: #1E1E20; }}
+        .audit-meta {{
+            background: #F5F5F5; border-bottom: 1px solid #E0E0E0;
+            padding: 6px 16px; font-size: 11px; color: #555;
+        }}
+        .audit-banner {{ padding: 10px 16px; font-size: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
+        .audit-banner-ok {{ background: #F0FFF4; color: #176B3A; border-bottom: 1px solid #C6F6D5; }}
+        .audit-banner-warn {{ background: #FFFBEB; color: #92400E; border-bottom: 1px solid #FDE68A; }}
+        .audit-banner a {{ color: #9A3412; font-weight: 600; }}
+        .audit-arrow {{ font-weight: 700; font-size: 14px; opacity: 0.65; }}
+        .audit-container {{ padding: 12px 16px; max-width: 1100px; margin: 0 auto; }}
+        .audit-section {{
+            border: 1px solid #E5E5E5; border-left: 3px solid #999;
+            border-radius: 4px; margin-bottom: 10px; padding: 10px 12px;
+        }}
+        .audit-format {{ border-left-color: #2563EB; }}
+        .audit-dropped {{ border-left-color: #D97706; }}
+        .audit-error {{ border-left-color: #DC2626; }}
+        .audit-summary {{ border-left-color: #6B7280; }}
+        .audit-title {{ font-size: 13px; margin-bottom: 4px; }}
+        .audit-intro {{ color: #666; font-size: 11px; margin-bottom: 8px; }}
+        .audit-list {{ list-style: none; }}
+        .audit-list > li {{ padding: 3px 0; border-bottom: 1px solid #F0F0F0; }}
+        .audit-sublist {{ list-style: none; margin: 2px 0 6px 16px; }}
+        .audit-sublist > li {{ padding: 1px 0; color: #444; border: none; }}
+        .audit-kind {{ color: #888; }}
+        code {{ background: #F3F4F6; padding: 1px 5px; border-radius: 3px; color: #B45309; }}
+        .audit-footer {{
+            background: #F3F3F3;
+            border-top: 1px solid #E0E0E0;
+            padding: 6px 16px;
+            text-align: center;
+            color: #666;
+            font-size: 10px;
+        }}
+        .audit-footer a {{ color: #666; text-decoration: none; }}
+        .audit-footer a:hover {{ text-decoration: underline; }}
+        .audit-header-actions {{ display: flex; align-items: center; gap: 12px; }}
+        .audit-del-btn {{ background: transparent; border: 1px solid #EF4444; color: #FCA5A5; font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }}
+        .audit-del-btn:hover {{ background: #EF4444; color: #FFFFFF; }}
+        .audit-modal {{ display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.45); align-items: center; justify-content: center; }}
+        .audit-modal.open {{ display: flex; }}
+        .audit-modal-box {{ background: #FFFFFF; border-radius: 8px; padding: 18px 20px; max-width: 560px; width: 90%; box-shadow: 0 12px 44px rgba(0,0,0,0.35); }}
+        .audit-modal-title {{ font-size: 14px; font-weight: 700; color: #991B1B; margin-bottom: 8px; }}
+        .audit-modal-text {{ font-size: 12px; color: #555; margin-bottom: 10px; }}
+        #auditDelCmd {{ width: 100%; box-sizing: border-box; font-family: 'Cascadia Code', monospace; font-size: 11px; padding: 8px; border: 1px solid #E0E0E0; border-radius: 4px; resize: none; }}
+        .audit-modal-actions {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }}
+        .audit-modal-btn {{ font-size: 12px; padding: 5px 14px; border-radius: 4px; cursor: pointer; border: 1px solid #D0D0D0; background: #F3F3F3; color: #333; }}
+        .audit-modal-btn:hover {{ background: #E8E8E8; }}
+        .audit-modal-primary {{ border-color: #DC2626; background: #FEF2F2; color: #B91C1C; }}
+        .audit-modal-primary:hover {{ background: #FEE2E2; }}
+    </style>
+</head>
+<body>
+    <div class="audit-header">
+        <div class="audit-header-title">
+            <img src="data:image/png;base64,{ICON_BASE64}" alt="">
+            Format Audit · v{APP_VERSION}
+        </div>
+        <div class="audit-header-actions">
+            <button type="button" id="auditDelBtn" class="audit-del-btn" title="Show the command to delete this report file">&#128465; Delete this report</button>
+            <a href="{index_filename}">&#8592; Back to Dashboard</a>
+        </div>
+    </div>
+    <div id="auditDelModal" class="audit-modal">
+        <div class="audit-modal-box">
+            <div class="audit-modal-title">Delete this report</div>
+            <div class="audit-modal-text">Run this command in a terminal to delete this report file:</div>
+            <textarea id="auditDelCmd" readonly rows="2"></textarea>
+            <div class="audit-modal-actions">
+                <button type="button" id="auditDelCopy" class="audit-modal-btn audit-modal-primary">Copy command</button>
+                <button type="button" id="auditDelClose" class="audit-modal-btn">Close</button>
+            </div>
+        </div>
+    </div>
+    <div class="audit-meta">Scope: {escape(scope)} · Generated: {escape(gen_time)}</div>
+    {banner}
+    <div class="audit-container">
+        {sections_block}
+    </div>
+    <div class="audit-footer">
+        <a href="https://github.com/oskar-gm/code-chat-viewer" target="_blank" rel="noopener">Code Chat Viewer</a> | <a href="https://github.com/oskar-gm/code-chat-viewer/issues" target="_blank" rel="noopener">Feedback</a>
+    </div>
+    <textarea id="audit-report-text" readonly aria-hidden="true" style="position:absolute; left:-9999px; top:-9999px;">{escape(plain_report)}</textarea>
+    <script>
+        function copyAuditReport() {{
+            var ta = document.getElementById('audit-report-text');
+            var btn = document.querySelector('.audit-copy');
+            var done = function() {{
+                var original = btn.getAttribute('data-label') || btn.textContent;
+                btn.setAttribute('data-label', original);
+                btn.textContent = '\\u2713 Copied';
+                setTimeout(function() {{ btn.textContent = btn.getAttribute('data-label'); }}, 1500);
+            }};
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(ta.value).then(done, function() {{ ta.select(); document.execCommand('copy'); done(); }});
+            }} else {{
+                ta.select(); document.execCommand('copy'); done();
+            }}
+        }}
+
+        // "Delete this report" — show the OS-appropriate command for this file.
+        (function(){{
+            var btn = document.getElementById('auditDelBtn');
+            var modal = document.getElementById('auditDelModal');
+            var cmd = document.getElementById('auditDelCmd');
+            if (!btn) return;
+            function delCmd(){{
+                var p = decodeURIComponent(location.pathname);
+                var BS = String.fromCharCode(92), Q = String.fromCharCode(39);
+                var win = navigator.platform.indexOf('Win') === 0 || (p.charAt(0) === '/' && p.charAt(2) === ':');
+                if (win) {{
+                    if (p.charAt(0) === '/' && p.charAt(2) === ':') p = p.substring(1);
+                    p = p.split('/').join(BS);
+                    return 'Remove-Item -LiteralPath ' + Q + p + Q + ' -Force';
+                }}
+                return 'rm -f -- ' + Q + p.split(Q).join(Q + BS + Q + Q) + Q;
+            }}
+            btn.addEventListener('click', function(){{
+                cmd.value = delCmd();
+                modal.classList.add('open');
+            }});
+            document.getElementById('auditDelClose').addEventListener('click', function(){{ modal.classList.remove('open'); }});
+            modal.addEventListener('click', function(e){{ if (e.target === modal) modal.classList.remove('open'); }});
+            document.getElementById('auditDelCopy').addEventListener('click', function(){{
+                cmd.select();
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cmd.value);
+                else document.execCommand('copy');
+            }});
+        }})();
+    </script>
+</body>
+</html>"""
+
+    audit_filename = f"CCV-Audit {datetime.now().strftime('%Y-%m-%d %H-%M')}.html"
+    audit_path = output_path / audit_filename
+    with open(audit_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return audit_path, findings
+
+
+def _version_tuple(v):
+    try:
+        return tuple(int(x) for x in str(v).split(".")[:3])
+    except (ValueError, AttributeError):
+        return None
+
+
+def _needs_force_recommendation(last, current):
+    """A minor/major bump (e.g. 2.5.x -> 2.6.0 / 3.0.0) — or no record at all —
+    warrants re-running Force; a patch bump (2.5.0 -> 2.5.1) or same version does not."""
+    cur = _version_tuple(current)
+    if not cur:
+        return False
+    lt = _version_tuple(last)
+    if not lt:
+        return True  # no record (feature is new) -> assume a jump to this version
+    return (cur[0], cur[1]) > (lt[0], lt[1])
+
+
+def _get_last_run_version():
+    """Version that last ran a Force, read straight from config.json (or None)."""
+    try:
+        p = find_config()
+        if p and p.exists():
+            with open(p, encoding="utf-8") as f:
+                return json.load(f).get("last_run_version")
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _save_last_run_version(version):
+    """Record the version that last ran a Force into config.json (best-effort)."""
+    try:
+        p = find_config()
+        if not p or not p.exists():
+            return
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        data["last_run_version"] = version
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except (OSError, ValueError):
+        pass
+
+
 def main():
     # Parse flags
     name_search = None
@@ -2628,6 +3589,12 @@ def main():
     current_jsonl_path = None
     force_regen = "--force" in sys.argv
     btw_mode = "--btw" in sys.argv
+    audit_mode = "--audit" in sys.argv
+    audit_scan = "50"
+    if audit_mode:
+        idx = sys.argv.index("--audit")
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
+            audit_scan = sys.argv[idx + 1]
 
     if "--name" in sys.argv:
         idx = sys.argv.index("--name")
@@ -2643,7 +3610,7 @@ def main():
 
     print()
     print("=" * 52)
-    print("  Code Chat Viewer - Chat Manager")
+    print(f"  Code Chat Viewer v{APP_VERSION} - Chat Manager")
     print("=" * 52)
     print()
 
@@ -2654,6 +3621,8 @@ def main():
     index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
     include_agents = config.get("agents", {}).get("include", True)
     min_agent_size = config.get("agents", {}).get("min_size_kb", 3) * 1024
+    # Compaction agents (agent-acompact-*) are noise by default; opt in via config.
+    include_compaction = config.get("agents", {}).get("include_compaction", False)
 
     output_path.mkdir(parents=True, exist_ok=True)
     chats_path.mkdir(exist_ok=True)
@@ -2680,12 +3649,25 @@ def main():
     print(f"  Config:  {config['_resolved']['config_path']}")
     print()
 
+    # Recommend a Force re-render after a minor/major version bump.
+    last_run = _get_last_run_version()
+    version_notice_shown = _needs_force_recommendation(last_run, APP_VERSION)
+    if version_notice_shown:
+        was = f" (was v{last_run})" if last_run else ""
+        print("  " + "═" * 50)
+        print(f"   ⚡  Updated to v{APP_VERSION}{was}")
+        print("   Run Force [2] to rebuild everything with this version —")
+        print("   it applies every fix and keeps all chats consistent.")
+        print("  " + "═" * 50)
+        print()
+
     # Interactive mode selection (manual/double-click only)
     if (sys.stdout.isatty() and not name_search and not current_mode
-            and not force_regen and not btw_mode):
+            and not force_regen and not btw_mode and not audit_mode):
         print("  [1] Normal — update only modified chats (fast)")
         print("  [2] Force  — regenerate ALL chats from scratch (slow)")
         print("  [3] BTW    — generate btw.html from /btw history (skip chats)")
+        print("  [4] Audit  — scan recent chats for format anomalies (skip chats)")
         print()
         choice = input("  Select mode [1]: ").strip()
         if choice == "2":
@@ -2696,6 +3678,10 @@ def main():
             btw_mode = True
             print()
             print("  BTW mode: generating btw.html from history.jsonl.")
+        elif choice == "4":
+            audit_mode = True
+            print()
+            print("  Audit mode: scanning the 50 most recent chats for anomalies.")
         print()
 
     # ---- BTW mode short-circuit: skip chat scan / organize / dashboard ----
@@ -2718,63 +3704,95 @@ def main():
             _countdown_close(60)
         return
 
+    # ---- Audit mode short-circuit: scan recent chats, skip generate/organize ----
+    if audit_mode:
+        print("-" * 52)
+        print("  Generating format audit...")
+        audit_file, findings = generate_audit_view(config, audit_scan)
+        print()
+        print("=" * 52)
+        print(f"  Audit ready: {audit_file}")
+        print(f"  Scanned: {findings['scanned']} chat(s)")
+        if _audit_has_findings(findings):
+            print("  Findings detected - see the report. If something looks wrong,")
+            print("  feedback is welcome: github.com/oskar-gm/code-chat-viewer/issues")
+        else:
+            print("  All clear - no anomalies.")
+        print("=" * 52)
+        print()
+        open_in_browser(audit_file)
+        if sys.stdout.isatty() and os.name == 'nt':
+            _countdown_close(60)
+        return
+
     print("-" * 52)
     print("  Scanning chats...")
 
+    # Files to process: top-level chats + agent chats under <session>/subagents/.
+    # Agents are detected by location; compaction agents and fork-context refs
+    # are skipped by default, plus anything below the size threshold.
+    scan_items = []  # (jsonl_file, is_agent)
     for project_dir in source_path.iterdir():
         if not project_dir.is_dir():
             continue
-
         for jsonl_file in project_dir.glob("*.jsonl"):
-            filename = jsonl_file.name
-            file_size = jsonl_file.stat().st_size
-            is_agent = filename.startswith("agent-")
+            scan_items.append((jsonl_file, False))
+        if include_agents:
+            for agent_file in project_dir.glob("*/subagents/agent-*.jsonl"):
+                scan_items.append((agent_file, True))
 
-            if is_agent and not include_agents:
+    # Generate agents first so the agentId -> html map is complete before the
+    # invoking chats render their "agent completed" links.
+    scan_items.sort(key=lambda x: not x[1])
+    AGENT_HTML_MAP.clear()
+
+    # A Force run re-renders everything with the current version — record it so we
+    # only recommend Force again after the next minor/major bump.
+    if force_regen:
+        _save_last_run_version(APP_VERSION)
+        if version_notice_shown:
+            print(f"  ✓ Rebuilding with v{APP_VERSION} — this update notice won't show again.")
+            print()
+
+    for jsonl_file, is_agent in scan_items:
+        filename = jsonl_file.name
+        file_size = jsonl_file.stat().st_size
+
+        if is_agent:
+            if not include_compaction and filename.startswith("agent-acompact-"):
                 continue
-            if is_agent and file_size < min_agent_size:
+            if file_size < min_agent_size:
                 continue
-            if is_snapshot_only(jsonl_file):
-                # Clean up existing HTML if it was generated before this filter
-                temp_hash = get_hash_from_filename(filename) if not filename.startswith("agent-") else filename.replace("agent-", "").replace(".jsonl", "")[:2]
-                orphan_html = find_existing_html(output_path, temp_hash, filename.startswith("agent-"))
-                if orphan_html:
-                    orphan_html.unlink()
+            if is_fork_context_ref(jsonl_file):
                 continue
+        if is_snapshot_only(jsonl_file):
+            # Clean up existing HTML if it was generated before this filter
+            temp_hash = agent_hash_from_filename(filename) if is_agent else get_hash_from_filename(filename)
+            orphan_html = find_existing_html(output_path, temp_hash, is_agent)
+            if orphan_html:
+                orphan_html.unlink()
+            continue
 
-            agent_suffix = ""
-            if is_agent:
-                agent_id = filename.replace("agent-", "").replace(".jsonl", "")[:2]
-                agent_suffix = f"Agent-{agent_id}"
-                hash_prefix = agent_id
-            else:
-                hash_prefix = get_hash_from_filename(filename)
+        agent_suffix = ""
+        if is_agent:
+            agent_id = agent_hash_from_filename(filename)
+            agent_suffix = f"Agent-{agent_id}"
+            hash_prefix = agent_id
+        else:
+            hash_prefix = get_hash_from_filename(filename)
 
-            display_name = (
-                f"{hash_prefix} {agent_suffix}".strip()
-                if not is_agent
-                else agent_suffix
-            )
+        display_name = (
+            f"{hash_prefix} {agent_suffix}".strip()
+            if not is_agent
+            else agent_suffix
+        )
 
-            existing_html = find_existing_html(output_path, hash_prefix, is_agent)
+        result = None
+        existing_html = find_existing_html(output_path, hash_prefix, is_agent)
 
-            if existing_html:
-                if force_regen or needs_update(jsonl_file, existing_html):
-                    existing_html.unlink()
-                    result, error = generate_chat_html(
-                        jsonl_file, chats_path, agent_suffix,
-                        f"../{index_filename}", sessions_meta,
-                        history_entries=history_entries,
-                        time_format=config["time_format"],
-                    )
-                    if result:
-                        print(f"  UPDATED: {display_name}")
-                        stats["updated"].append(display_name)
-                    else:
-                        stats["errors"][error] = stats["errors"].get(error, 0) + 1
-                else:
-                    stats["skipped"] += 1
-            else:
+        if existing_html:
+            if force_regen or needs_update(jsonl_file, existing_html):
+                existing_html.unlink()
                 result, error = generate_chat_html(
                     jsonl_file, chats_path, agent_suffix,
                     f"../{index_filename}", sessions_meta,
@@ -2782,10 +3800,31 @@ def main():
                     time_format=config["time_format"],
                 )
                 if result:
-                    print(f"  NEW:     {display_name}")
-                    stats["new"].append(display_name)
+                    print(f"  UPDATED: {display_name}")
+                    stats["updated"].append(display_name)
                 else:
                     stats["errors"][error] = stats["errors"].get(error, 0) + 1
+            else:
+                stats["skipped"] += 1
+        else:
+            result, error = generate_chat_html(
+                jsonl_file, chats_path, agent_suffix,
+                f"../{index_filename}", sessions_meta,
+                history_entries=history_entries,
+                time_format=config["time_format"],
+            )
+            if result:
+                print(f"  NEW:     {display_name}")
+                stats["new"].append(display_name)
+            else:
+                stats["errors"][error] = stats["errors"].get(error, 0) + 1
+
+        # Remember each agent's HTML (generated or already present) so invoking
+        # chats can link their "agent completed" notices to it.
+        if is_agent:
+            agent_fn = result or (existing_html.name if existing_html else None)
+            if agent_fn:
+                AGENT_HTML_MAP[agent_id] = agent_fn
 
     # Scan summary
     total_scanned = len(stats["new"]) + len(stats["updated"]) + stats["skipped"]
@@ -2802,8 +3841,11 @@ def main():
     shorts_stats = manage_shorts(config)
     archived_stats = manage_archived(config)
 
-    # Generate dashboard
+    # Always refresh the BTW view so it never goes stale; the dashboard links to
+    # it from the "+" menu.
     print("  Generating dashboard...")
+    with redirect_stdout(io.StringIO()):
+        generate_btw_view(config)
     index_total = generate_index(config)
 
     # Summary

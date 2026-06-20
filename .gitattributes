@@ -1,0 +1,5 @@
+# Keep README/release screenshots out of the source archives (Source code
+# zip/tar.gz) that GitHub auto-generates for each release. The files stay in the
+# repo — so their raw.githubusercontent.com URLs work for embedding/preview — but
+# they are excluded from `git archive`, keeping the downloadable archives lean.
+assets/** export-ignore

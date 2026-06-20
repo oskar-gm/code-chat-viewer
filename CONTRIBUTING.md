@@ -154,10 +154,10 @@ Detailed description (if needed)
 
 **Examples:**
 ```
-feat(parser): add support for snapshot messages
+feat(parser): render conversation rewinds
 
-- Parse conversation snapshot events
-- Display snapshot metadata
+- Detect conversation rewind markers
+- Show a one-line rewind block with a Go button
 - Update HTML template
 
 Closes #42
@@ -206,7 +206,17 @@ Fixes #15
 
 ### Testing
 
-Before submitting your PR, please test:
+The project includes a pytest suite in `tests/` covering parsing, rendering, chat generation, dashboard utilities, and regression tests (~81% coverage on `visualizer.py`). All fixtures are synthetic — no real chat data needed.
+
+**Run the test suite** (requires `pytest`; install with `pip install pytest`):
+
+```bash
+python -m pytest tests
+```
+
+Run from the repository root. The suite is fast and self-contained.
+
+Before submitting your PR, please also test manually:
 
 1. **Single chat conversion (visualizer.py):**
    ```bash
@@ -407,10 +417,10 @@ Descripción detallada (si es necesario)
 
 **Ejemplos:**
 ```
-feat(parser): añadir soporte para mensajes snapshot
+feat(parser): renderizar rewinds de conversación
 
-- Parsear eventos de snapshot de conversación
-- Mostrar metadata de snapshot
+- Detectar marcadores de rewind de conversación
+- Mostrar un bloque rewind de una línea con botón Go
 - Actualizar plantilla HTML
 
 Closes #42
@@ -460,7 +470,17 @@ Fixes #15
 
 ### Pruebas
 
-Antes de enviar tu PR, por favor prueba:
+El proyecto incluye una suite pytest en `tests/` que cubre parseo, renderizado, generación de chats, utilidades del dashboard y tests de regresión (~81% de cobertura en `visualizer.py`). Todas las fixtures son sintéticas — no se necesitan datos reales de chat.
+
+**Ejecutar la suite de tests** (requiere `pytest`; instalar con `pip install pytest`):
+
+```bash
+python -m pytest tests
+```
+
+Ejecutar desde la raíz del repositorio. La suite es rápida y autocontenida.
+
+Antes de enviar tu PR, prueba también manualmente:
 
 1. **Conversión individual (visualizer.py):**
    ```bash
