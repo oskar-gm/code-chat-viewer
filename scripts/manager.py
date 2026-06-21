@@ -25,7 +25,7 @@ import io
 import threading
 import webbrowser
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import redirect_stdout
 from html import escape
 
@@ -78,67 +78,80 @@ def _prompt_int(label: str, default: int) -> int:
         return default
 
 
-def interactive_setup() -> Path:
-    """Guide the user through creating config.json step by step."""
+def interactive_setup(existing: dict = None) -> Path:
+    """Guide the user through creating (or updating) config.json step by step.
+
+    If `existing` is given, its values are shown as defaults (reconfigure mode).
+    """
     home = Path.home()
-    print("  No config.json found. Let's set it up!")
+    e = existing or {}
+    src, out = e.get("source", {}), e.get("output", {})
+    ag, sh, ar = e.get("agents", {}), e.get("shorts", {}), e.get("archive", {})
+
+    if existing:
+        print("  Reconfigure CCV — current values shown in [brackets].")
+    else:
+        print("  No config.json found. Let's set it up!")
     print()
-    print("  Press Enter to accept defaults shown in [brackets].")
+    print("  Press Enter to keep the value shown in [brackets].")
     print()
 
     # --- Paths ---
     print("  --- Paths ---")
-    source = _prompt(
-        "Claude Code chats folder",
-        "~/.claude/projects",
-    )
-    output = _prompt(
-        "Output folder (HTMLs + dashboard)",
-        str(home / "Code Chat Viewer"),
-    )
-    dashboard = _prompt("Dashboard filename", "CCV-Dashboard.html")
+    source = _prompt("Claude Code chats folder", src.get("projects_path", "~/.claude/projects"))
+    output = _prompt("Output folder (HTMLs + dashboard)", out.get("folder", str(home / "Code Chat Viewer")))
+    dashboard = _prompt("Dashboard filename", out.get("index_filename", "CCV-Dashboard.html"))
+    print()
+
+    # --- Display ---
+    print("  --- Display ---")
+    tf_in = _prompt("Time format for timestamps (12h or 24h)", e.get("time_format", "12h"))
+    time_format = tf_in.lower() if tf_in.lower() in ("12h", "24h") else "12h"
     print()
 
     # --- Agents ---
     print("  --- Agent chats ---")
     print("  Claude Code creates sub-chats for background tasks.")
-    include_agents = _prompt_yn("Include agent chats?")
-    min_agent_kb = 3
+    include_agents = _prompt_yn("Include agent chats?", ag.get("include", True))
+    min_agent_kb = ag.get("min_size_kb", 3)
     if include_agents:
-        min_agent_kb = _prompt_int(
-            "Min agent size in KB (skip tiny ones)", 3
-        )
+        min_agent_kb = _prompt_int("Min agent size in KB (skip tiny ones)", min_agent_kb)
     print()
 
     # --- Organization ---
     print("  --- Chat organization ---")
     print("  Inactive chats can be sorted into subfolders automatically.")
-    inactive_days = _prompt_int("Days without activity to consider inactive", 5)
+    inactive_days = _prompt_int("Days without activity to consider inactive", e.get("inactive_days", 5))
     print()
 
-    shorts_enabled = _prompt_yn("Enable Shorts? (group small inactive chats)")
-    shorts_max_kb = 40
+    shorts_enabled = _prompt_yn("Enable Shorts? (group small inactive chats)", sh.get("enabled", True))
+    shorts_max_kb = sh.get("max_size_kb", 40)
     if shorts_enabled:
-        shorts_max_kb = _prompt_int(
-            "Max size in KB to count as 'short'", 40
-        )
+        shorts_max_kb = _prompt_int("Max size in KB to count as 'short'", shorts_max_kb)
 
-    archive_enabled = _prompt_yn("Enable Archive? (move old inactive chats)")
+    archive_enabled = _prompt_yn("Enable Archive? (move old inactive chats)", ar.get("enabled", True))
     print()
 
     # --- Save ---
+    # NOTE: any new config option must be kept in sync across THREE places:
+    #   (1) config.example.json   (2) this interactive_setup()   (3) SKILL.md "Step 2"
     config = {
-        "_readme": "Code Chat Viewer - Configuration. Edit or delete this file to reconfigure.",
+        "_readme": "Code Chat Viewer - Configuration. Edit or delete this file to reconfigure (or use [5] Reconfigure in the menu).",
         "source": {"projects_path": source},
         "output": {"folder": output, "index_filename": dashboard},
-        "agents": {"include": include_agents, "min_size_kb": min_agent_kb, "include_compaction": False},
+        "time_format": time_format,
+        "agents": {
+            "include": include_agents,
+            "min_size_kb": min_agent_kb,
+            "include_compaction": ag.get("include_compaction", False),
+        },
         "inactive_days": inactive_days,
         "shorts": {
             "enabled": shorts_enabled,
-            "folder": "Shorts",
+            "folder": sh.get("folder", "Shorts"),
             "max_size_kb": shorts_max_kb,
         },
-        "archive": {"enabled": archive_enabled, "folder": "Archived"},
+        "archive": {"enabled": archive_enabled, "folder": ar.get("folder", "Archived")},
     }
 
     config_path = PROJECT_ROOT / "config.json"
@@ -564,6 +577,19 @@ def find_chat_by_name(
 def open_in_browser(path: Path):
     """Open a file in the default browser."""
     webbrowser.open(path.as_uri())
+
+
+def _open_path(path):
+    """Open a local file with the OS default app (e.g. the text editor)."""
+    try:
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]  # noqa
+        else:
+            import subprocess
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.run([opener, str(path)], check=False)
+    except Exception:
+        print("  (Could not open it automatically — open the path above manually.)")
 
 
 # ---------------------------------------------------------------------------
@@ -3582,6 +3608,136 @@ def _save_last_run_version(version):
         pass
 
 
+def _print_current_config(config: dict):
+    """Show the current settings in a readable summary."""
+    out = config.get("output", {})
+    ag = config.get("agents", {})
+    sh = config.get("shorts", {})
+    ar = config.get("archive", {})
+    print("  Current settings:")
+    print(f"    Source folder  : {config.get('source', {}).get('projects_path', '?')}")
+    print(f"    Output folder  : {out.get('folder', '?')}")
+    print(f"    Dashboard file : {out.get('index_filename', '?')}")
+    print(f"    Time format    : {config.get('time_format', '12h')}")
+    print(f"    Agent chats    : {'yes' if ag.get('include', True) else 'no'} (min {ag.get('min_size_kb', 3)} KB)")
+    print(f"    Inactive days  : {config.get('inactive_days', 5)}")
+    print(f"    Shorts         : {'yes' if sh.get('enabled', True) else 'no'} (max {sh.get('max_size_kb', 40)} KB)")
+    print(f"    Archive        : {'yes' if ar.get('enabled', True) else 'no'}")
+
+
+def reconfigure(config: dict):
+    """Sub-menu: change CCV settings without deleting config.json by hand."""
+    print()
+    print("  How do you want to reconfigure?")
+    print("  [1] Redo setup (guided)  — re-run the step-by-step setup, overwrite config.json")
+    print("  [2] Edit config.json     — open the file in your editor")
+    print("  [3] With Claude Code     — let Claude Code do it")
+    print("  [0] Back")
+    print()
+    sub = input("  Choose [0]: ").strip()
+    print()
+    if sub == "1":
+        _print_current_config(config)
+        print()
+        print("  This rewrites config.json — Enter keeps each current value as you go.")
+        if not _prompt_yn("Continue?", False):
+            print("  Cancelled — nothing changed.")
+            print()
+            return
+        print()
+        existing = {k: v for k, v in config.items() if not k.startswith("_")}
+        interactive_setup(existing=existing)
+        print("  Settings updated. Re-run CCV to apply them.")
+    elif sub == "2":
+        cfg_path = config["_resolved"]["config_path"]
+        print(f"  config.json: {cfg_path}")
+        _open_path(cfg_path)
+        print("  Edit the values, save, and re-run CCV.")
+    elif sub == "3":
+        print("  In Claude Code, just ask:")
+        print('    "Reconfigure CCV (Code Chat Viewer)"  or  "update the CCV config"')
+        print("  It reads SKILL.md, asks your preferences and rewrites config.json for you.")
+    else:
+        print("  Nothing changed.")
+    print()
+
+
+def _print_update_instructions(html_url):
+    """Print how to update CCV depending on how it was obtained."""
+    print()
+    if (PROJECT_ROOT / ".git").exists():
+        print("  This is a git clone — to update, pull the latest:")
+        print(f'    git -C "{PROJECT_ROOT}" pull')
+    else:
+        print("  To update, download the latest and replace the files:")
+        print("    https://github.com/oskar-gm/code-chat-viewer/archive/refs/heads/main.zip")
+    print(f"  Release notes: {html_url}")
+
+
+def check_for_updates():
+    """Check GitHub for a newer STABLE release (published >= 72h ago).
+
+    The only feature that touches the network, and only on explicit request.
+    """
+    import urllib.request
+    api = "https://api.github.com/repos/oskar-gm/code-chat-viewer/releases/latest"
+    releases_url = "https://github.com/oskar-gm/code-chat-viewer/releases"
+    print()
+    print("  Checking GitHub for a newer version...")
+    try:
+        req = urllib.request.Request(
+            api,
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "code-chat-viewer"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.load(resp)
+    except Exception:
+        print("  Couldn't check — no connection or GitHub unreachable.")
+        print()
+        return
+
+    tag = str(data.get("tag_name", "")).lstrip("vV")
+    html_url = data.get("html_url", releases_url)
+    published = str(data.get("published_at", ""))
+
+    if not tag or _version_tuple(tag) <= _version_tuple(APP_VERSION):
+        print(f"  You're on the latest version (v{APP_VERSION}).")
+        print()
+        return
+
+    # A newer tag exists — apply the 72h stability window.
+    stable, age_txt = True, ""
+    try:
+        pub = datetime.fromisoformat(published.replace("Z", "+00:00"))
+        age = datetime.now(timezone.utc) - pub
+        stable = age >= timedelta(hours=72)
+        age_txt = f"{age.days} day(s) ago" if age.days >= 1 else "less than a day ago"
+    except Exception:
+        pass
+
+    print()
+    if stable:
+        extra = f" (released {age_txt})" if age_txt else ""
+        print(f"  New version available: v{tag}{extra}.")
+    else:
+        recent = f" — {age_txt}" if age_txt else ""
+        print(f"  v{tag} is out but very recent (<72h){recent}.")
+        print("  Waiting a little for it to settle is recommended.")
+    print()
+    print("  [1] Open the release page")
+    print("  [2] How to update")
+    print("  [0] Back")
+    print()
+    sub = input("  Choose [0]: ").strip()
+    if sub == "1":
+        webbrowser.open(html_url)
+        print("  Opened in your browser.")
+    elif sub == "2":
+        _print_update_instructions(html_url)
+    print()
+
+
 def main():
     # Parse flags
     name_search = None
@@ -3662,12 +3818,17 @@ def main():
         print()
 
     # Interactive mode selection (manual/double-click only)
-    if (sys.stdout.isatty() and not name_search and not current_mode
-            and not force_regen and not btw_mode and not audit_mode):
+    interactive_session = (sys.stdout.isatty() and not name_search and not current_mode
+                           and not force_regen and not btw_mode and not audit_mode)
+    if interactive_session:
         print("  [1] Normal — update only modified chats (fast)")
         print("  [2] Force  — regenerate ALL chats from scratch (slow)")
+        print()
         print("  [3] BTW    — generate btw.html from /btw history (skip chats)")
         print("  [4] Audit  — scan recent chats for format anomalies (skip chats)")
+        print()
+        print("  [5] Reconfigure   — change settings / how to reconfigure")
+        print("  [6] Check updates — see if a newer (stable) version is out")
         print()
         choice = input("  Select mode [1]: ").strip()
         if choice == "2":
@@ -3682,6 +3843,18 @@ def main():
             audit_mode = True
             print()
             print("  Audit mode: scanning the 50 most recent chats for anomalies.")
+        elif choice == "5":
+            reconfigure(config)
+            if sys.stdout.isatty() and os.name == "nt":
+                if _countdown_close(60, allow_menu=True) == "menu":
+                    return main()
+            return
+        elif choice == "6":
+            check_for_updates()
+            if sys.stdout.isatty() and os.name == "nt":
+                if _countdown_close(60, allow_menu=True) == "menu":
+                    return main()
+            return
         print()
 
     # ---- BTW mode short-circuit: skip chat scan / organize / dashboard ----
@@ -3701,7 +3874,8 @@ def main():
             print("=" * 52)
             print()
         if sys.stdout.isatty() and os.name == 'nt':
-            _countdown_close(60)
+            if _countdown_close(60, allow_menu=interactive_session) == "menu":
+                return main()
         return
 
     # ---- Audit mode short-circuit: scan recent chats, skip generate/organize ----
@@ -3722,7 +3896,8 @@ def main():
         print()
         open_in_browser(audit_file)
         if sys.stdout.isatty() and os.name == 'nt':
-            _countdown_close(60)
+            if _countdown_close(60, allow_menu=interactive_session) == "menu":
+                return main()
         return
 
     print("-" * 52)
@@ -3915,16 +4090,21 @@ def main():
 
     # Auto-close countdown in interactive mode (Windows terminal)
     if sys.stdout.isatty() and os.name == 'nt':
-        _countdown_close(60)
+        if _countdown_close(60, allow_menu=interactive_session) == "menu":
+            return main()
 
 
-def _countdown_close(seconds: int):
-    """Show a countdown and close. Press Enter to close immediately."""
+def _countdown_close(seconds: int, allow_menu: bool = False) -> str:
+    """Countdown before closing. Returns 'menu' if the user asks to go back to the
+    menu (types anything + Enter); otherwise 'close' (empty Enter or timeout)."""
     stop_event = threading.Event()
+    result = {"action": "close"}
 
     def wait_for_enter():
         try:
-            input()
+            line = input()
+            if allow_menu and line.strip():
+                result["action"] = "menu"
         except EOFError:
             pass
         stop_event.set()
@@ -3932,12 +4112,15 @@ def _countdown_close(seconds: int):
     listener = threading.Thread(target=wait_for_enter, daemon=True)
     listener.start()
 
+    hint = ("Enter to close now, or m + Enter for the menu"
+            if allow_menu else "press Enter to close now")
     for remaining in range(seconds, 0, -1):
-        print(f"\r  Closing in {remaining}s — press Enter to close now...", end="", flush=True)
+        print(f"\r  Closing in {remaining}s — {hint}...", end="", flush=True)
         if stop_event.wait(timeout=1):
             break
 
-    print("\r" + " " * 60 + "\r", end="")
+    print("\r" + " " * 72 + "\r", end="")
+    return result["action"]
 
 
 if __name__ == "__main__":

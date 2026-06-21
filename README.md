@@ -1,12 +1,12 @@
 # Code Chat Viewer
 
-> Turn your Claude Code chat logs into a clean, searchable visual panel — offline, zero dependencies.
+> Turn your Claude Code chat history (JSONL logs) into a clean, searchable visual panel — offline, zero dependencies.
 
 Claude Code stores your conversations as raw JSONL files. **Code Chat Viewer** turns them into polished, self-contained HTML pages plus an **interactive dashboard** to search, sort, filter and browse your whole history. Pure Python standard library — nothing to install.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-2.5.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.5.0)
+[![Version](https://img.shields.io/badge/version-2.6.0-green.svg)](https://github.com/oskar-gm/code-chat-viewer/releases/tag/v2.6.0)
 [![Claude Code](https://img.shields.io/badge/Claude_Code_CLI-compatible-blueviolet.svg)](https://github.com/anthropics/claude-code)
 
 ### Chat View
@@ -30,7 +30,7 @@ Claude Code stores your conversations as raw JSONL files. **Code Chat Viewer** t
 
 1. Download or clone this repo
 2. Double-click `scripts/manager.py` — the first run asks a few quick questions and writes the config for you, then builds the dashboard and opens it in your browser
-3. Next time, just double-click and pick *Normal* (only changed chats) or *Force* (rebuild all)
+3. Next time, just double-click and pick *Normal* (only changed chats), *Force* (rebuild all), *Reconfigure*, or *Check updates*
 
 **B — As a Claude Code skill**
 
@@ -41,7 +41,7 @@ Claude Code stores your conversations as raw JSONL files. **Code Chat Viewer** t
 
 **Latest version:** [Download latest](https://github.com/oskar-gm/code-chat-viewer/archive/refs/heads/main.zip) - Always up-to-date (direct download of `main`)
 
-**Version 2.5.0:** [Download v2.5.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.5.0.zip) - Stable release
+**Version 2.6.0:** [Download v2.6.0.zip](https://github.com/oskar-gm/code-chat-viewer/archive/refs/tags/v2.6.0.zip) - Stable release
 
 Or browse all [Releases](https://github.com/oskar-gm/code-chat-viewer/releases)
 
@@ -97,7 +97,7 @@ Then ask Claude Code: *"Visualize my Claude Code chats"* or *"Set up the chat vi
 
 1. **First time**: Claude Code reads `SKILL.md`, detects your chat files, asks your preferences, creates `config.json`
 2. **Next times**: Claude Code reads `config.json` and runs the manager — no questions asked
-3. **To update settings**: Ask Claude Code *"Update visualizer config"*
+3. **To update settings**: pick **[5] Reconfigure** in the menu (guided setup / edit the file / via Claude Code), or ask Claude Code *"Reconfigure CCV"*. Check for new releases anytime with **[6] Check updates**
 
 ### Configuration
 
@@ -187,6 +187,14 @@ Environment variables (take precedence over `config.json`):
 - Stats bar shows a real Rewinds count (replaces the old raw Snapshots count)
 - Chat header shows the creation date labelled `Created:`, in a format tied to the time setting (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
 - Edit/Write diff theme toggle clarified: the button previews the current theme (dark while the diff is dark, cream once light) and its label states the action ("Switch to light/dark")
+
+### What's New in v2.6
+
+**Manager menu:**
+- **[5] Reconfigure** — change settings without deleting `config.json` by hand: guided re-setup (shows the current values and asks before overwriting), open `config.json` in your editor, or do it via Claude Code
+- **[6] Check updates** — checks GitHub for a newer release on demand (the tool stays offline otherwise); flags a new **stable** version (published ≥72h ago) with shortcuts to the release page or update instructions
+- Menu grouped visually (generate · views · utilities); the close countdown can now go **back to the menu** (type anything + Enter), not just close immediately
+- Standalone setup also asks for the **time format** (12h/24h) now, matching the Claude Code setup
 
 ### What's New in v2.5
 
@@ -482,7 +490,7 @@ Claude Code guarda tus conversaciones como archivos JSONL en crudo. **Code Chat 
 
 1. Descarga o clona este repo
 2. Doble clic en `scripts/manager.py` — la primera vez te hace unas preguntas rápidas y crea la configuración por ti, luego genera el panel y lo abre en tu navegador
-3. Las siguientes veces, doble clic y eliges *Normal* (solo los chats modificados) o *Force* (regenerar todo)
+3. Las siguientes veces, doble clic y eliges *Normal* (solo los chats modificados), *Force* (regenerar todo), *Reconfigure* o *Check updates*
 
 **B — Como skill de Claude Code**
 
@@ -532,7 +540,7 @@ Luego pide a Claude Code: *"Visualiza mis chats de Claude Code"* o *"Configura e
 
 1. **Primera vez**: Claude Code lee `SKILL.md`, detecta tus archivos de chat, pregunta tus preferencias, crea `config.json`
 2. **Siguientes veces**: Claude Code lee `config.json` y ejecuta el manager — sin preguntas
-3. **Para cambiar ajustes**: Pide a Claude Code *"Actualiza la configuración del visualizador"*
+3. **Para cambiar ajustes**: usa **[5] Reconfigure** en el menú (setup guiado / editar el archivo / vía Claude Code), o pide a Claude Code *"Reconfigura CCV"*. Comprueba nuevas versiones cuando quieras con **[6] Check updates**
 
 ### Configuración
 
@@ -622,6 +630,14 @@ Variables de entorno (tienen precedencia sobre `config.json`):
 - La barra de estadísticas muestra un contador real de Rewinds (sustituye al antiguo conteo bruto de Snapshots)
 - El header del chat muestra la fecha de creación etiquetada `Created:`, en un formato ligado al ajuste de hora (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
 - Toggle de tema de diffs Edit/Write clarificado: el botón previsualiza el tema actual (oscuro mientras el diff está oscuro, crema cuando está claro) y su etiqueta indica la acción ("Switch to light/dark")
+
+### Novedades en v2.6
+
+**Menú del manager:**
+- **[5] Reconfigure** — cambia los ajustes sin borrar `config.json` a mano: re-setup guiado (muestra los valores actuales y pide confirmación antes de sobrescribir), abrir `config.json` en tu editor, o hacerlo vía Claude Code
+- **[6] Check updates** — comprueba en GitHub si hay una versión más reciente, bajo demanda (la herramienta sigue siendo offline el resto del tiempo); avisa de una versión nueva **estable** (publicada hace ≥72h) con atajos a la página del release o a las instrucciones de actualización
+- Menú agrupado visualmente (generar · vistas · utilidades); el countdown de cierre permite **volver al menú** (escribir algo + Enter), no solo cerrar directo
+- El setup standalone ahora también pregunta el **formato de hora** (12h/24h), igual que el setup vía Claude Code
 
 ### Novedades en v2.5
 

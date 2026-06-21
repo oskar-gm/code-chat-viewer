@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Code Chat Viewer v2.5.0
+Code Chat Viewer v2.6.0
 
 Converts Claude Code chat JSON files (JSONL format) into formatted HTML
 visualizations with terminal-style aesthetics, syntax highlighting, and
@@ -10,7 +10,7 @@ Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
 
 Author: Óscar González Martín
-Version: 2.5.0
+Version: 2.6.0
 Contact: oscar@nucleoia.es
 Website: https://nucleoia.es
 Repository: https://github.com/oskar-gm/code-chat-viewer
@@ -96,7 +96,7 @@ def parse_chat_json(json_file: str) -> List[Dict]:
     return messages
 
 # Application version — single source of truth (used in headers and meta tags).
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 
 # Time display format for timestamps: "12h" (AM/PM) or "24h".
 # Set by generate_html() from config; "12h" is the default.
@@ -1747,7 +1747,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     <!-- SEO Meta Tags -->
     <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, VS Code, and AI coding assistants.">
-    <meta name="keywords" content="Claude Code, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, code assistant history, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard, coding assistant logs">
+    <meta name="keywords" content="Claude Code, Claude Code history, chat history, conversation history, claude code chat history, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard">
 
     <meta name="generator" content="Code Chat Viewer v{APP_VERSION} - https://github.com/oskar-gm/code-chat-viewer">
     <meta name="robots" content="index, follow">
