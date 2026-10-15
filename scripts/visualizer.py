@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Code Chat Viewer v2.6.0
+Code Chat Viewer v2.7.0
 
 Converts Claude Code chat JSON files (JSONL format) into formatted HTML
 visualizations with terminal-style aesthetics, syntax highlighting, and
@@ -10,7 +10,7 @@ Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
 
 Author: Óscar González Martín
-Version: 2.6.0
+Version: 2.7.0
 Contact: oscar@nucleoia.es
 Website: https://nucleoia.es
 Repository: https://github.com/oskar-gm/code-chat-viewer
@@ -82,7 +82,7 @@ ICON_FAVICON_BASE64 = (
 def parse_chat_json(json_file: str) -> List[Dict]:
     """Read and parse a JSONL file line by line."""
     messages = []
-    with open(json_file, 'r', encoding='utf-8') as f:
+    with open(json_file, 'r', encoding='utf-8', errors='replace') as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if line:
@@ -91,12 +91,37 @@ def parse_chat_json(json_file: str) -> List[Dict]:
                     data['_line_number'] = line_num
                     messages.append(data)
                 except json.JSONDecodeError as e:
+                    # Don't drop malformed lines silently: keep a visible marker in
+                    # the flow so a format change or a truncated line surfaces to the
+                    # reader instead of vanishing. The console warning also stays.
                     print(f"Warning: Error parsing line {line_num}: {e}")
+                    messages.append({'type': '_parse_error',
+                                     '_line_number': line_num, '_error': str(e)})
                     continue
     return messages
 
+
+def dedup_reemitted_messages(messages: List[Dict]) -> List[Dict]:
+    """A rewind can re-emit a whole segment verbatim with IDENTICAL uuids (the same
+    message written to the file twice — not a fork, which has different uuids). Keep
+    the FIRST occurrence of each uuid so every message renders once, at its original
+    position. Entries without a uuid (session metadata, file-history-snapshot) are
+    never deduped. This removes the duplicated content and the duplicated DOM anchors
+    that made gotoMessage land on the wrong occurrence."""
+    seen = set()
+    out = []
+    for m in messages:
+        u = m.get('uuid') if isinstance(m, dict) else None
+        if u:
+            if u in seen:
+                continue
+            seen.add(u)
+        out.append(m)
+    return out
+
+
 # Application version — single source of truth (used in headers and meta tags).
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 # Time display format for timestamps: "12h" (AM/PM) or "24h".
 # Set by generate_html() from config; "12h" is the default.
@@ -120,12 +145,27 @@ KNOWN_MESSAGE_TYPES = frozenset({
 KNOWN_METADATA_TYPES = frozenset({
     'system', 'custom-title', 'attachment', 'agent-name', 'last-prompt',
     'permission-mode', 'mode', 'ai-title', 'queue-operation', 'bridge-session',
+    # Newer Claude Code bookkeeping — none carries conversation (api-request-blob
+    # holds cache copies of messages already present as their own entries).
+    'agent-color', 'agent-setting', 'atis-latch', 'cost-state', 'progress',
+    'file-history-delta', 'fork-context-ref', 'frame-link', 'relocated',
+    'api-request', 'api-request-blob', 'api-request-shape',
+    'artifact-autoreact-ledger', 'artifact-comment-monitor',
 })
 
-# Content-item types inside a message's content list. 'image' is part of the
-# format but CCV has no dedicated renderer for it yet (shown as a generic block).
+# Metadata entries that never render nor count. 'system' and 'attachment' stay
+# out: compact boundaries and queued messages come from them. Filtering by type
+# matters because 'api-request-blob' entries carry a message WITH a role (cache
+# copies of messages already in the chat), which would otherwise render twice.
+_NEVER_RENDERED_TYPES = KNOWN_METADATA_TYPES - {'system', 'attachment'}
+
+# Content-item types inside a message's content list. Images open in the image
+# modal; documents (attached PDFs) are named but cannot be opened yet; a
+# 'fallback' marks a mid-answer model switch; 'tool_addition' (tool definitions
+# added mid-session) is internal plumbing and stays hidden.
 KNOWN_CONTENT_TYPES = frozenset({
-    'text', 'thinking', 'tool_use', 'tool_result', 'image',
+    'text', 'thinking', 'tool_use', 'tool_result', 'image', 'document',
+    'fallback', 'tool_addition',
 })
 
 
@@ -144,6 +184,23 @@ def format_timestamp(timestamp_str: str) -> str:
         return dt.strftime(f'%Y-%m-%d {_time_pattern()}')
     except (ValueError, TypeError, AttributeError):
         return ""
+
+
+def _instant_ms(timestamp_str):
+    """Epoch milliseconds of an ISO-8601 timestamp, or None if it can't be read.
+
+    Ordering events from different sources must compare instants, never the
+    strings: the chat's timestamps are UTC ("...Z") while others carry a local
+    offset ("...+02:00"), and as text they sort hours apart. A timestamp
+    without offset is read as local time, like format_timestamp does.
+    """
+    try:
+        dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.timestamp() * 1000
 
 
 def _format_system_markers(html: str) -> str:
@@ -219,7 +276,7 @@ def _get_text_from_content(content) -> str:
     if isinstance(content, list):
         for item in content:
             if isinstance(item, dict) and item.get('type') == 'text':
-                return item.get('text', '')
+                return item.get('text') or ''
             elif isinstance(item, str):
                 return item
     return ''
@@ -260,17 +317,35 @@ def is_compact_summary(text: str) -> bool:
     """Check if text is a compact summary (continuation marker)."""
     return text.strip().startswith('This session is being continued from a previous conversation')
 
+def is_compact_summary_entry(msg) -> bool:
+    """A compact/summarize continuation entry. Claude Code flags it structurally
+    (`isCompactSummary`); the continuation phrase is the fallback for chats
+    written before the flag existed. Either signal is enough, so compacts stay
+    recognised if the wording changes or the flag is missing."""
+    if not isinstance(msg, dict):
+        return False
+    return msg.get('isCompactSummary') is True or is_compact_summary(_get_message_text(msg))
+
+# System messages are recognised by the tag they START with. A message that only
+# quotes the tag (discussing the format, a note relayed from another session) is
+# conversation: matching the tag anywhere would hide it whole or replace it with
+# the tag's content. Task notifications may also arrive under a harness header
+# line, which is accepted before their tag.
+_HARNESS_NOTICE_PREFIX = '[SYSTEM NOTIFICATION'
+
 def is_caveat_message(text: str) -> bool:
-    """Check if text contains local-command-caveat (internal system text)."""
-    return '<local-command-caveat>' in text
+    """Check if text is a local-command-caveat (internal system text)."""
+    return text.lstrip().startswith('<local-command-caveat>')
 
 def is_stdout_message(text: str) -> bool:
-    """Check if text contains local-command-stdout."""
-    return '<local-command-stdout>' in text
+    """Check if text is a local-command-stdout block."""
+    return text.lstrip().startswith('<local-command-stdout>')
 
 def is_task_notification(text: str) -> bool:
-    """Check if text contains task-notification tags."""
-    return '<task-notification>' in text
+    """Check if text is a task notification (possibly under a harness header)."""
+    s = text.lstrip()
+    return (s.startswith('<task-notification>')
+            or (s.startswith(_HARNESS_NOTICE_PREFIX) and '<task-notification>' in s))
 
 
 def is_image_source_message(content) -> bool:
@@ -411,9 +486,11 @@ def parse_user_rejection(text: str) -> dict | None:
     """Detect and parse a tool_use rejection with optional user feedback.
 
     Returns dict with 'feedback' (user message or empty) and 'has_feedback' flag,
-    or None if not a rejection pattern.
+    or None if not a rejection pattern. A real rejection STARTS with Claude
+    Code's sentence; a tool result that merely contains it (a file read, a log)
+    is content and must keep rendering as such.
     """
-    if "doesn't want to proceed" not in text:
+    if not text.lstrip().startswith("The user doesn't want to proceed"):
         return None
     feedback = ''
     if 'the user said:\n' in text:
@@ -431,7 +508,7 @@ def _get_tool_result_text(item: dict) -> str:
     if isinstance(content, list):
         for sub in content:
             if isinstance(sub, dict) and sub.get('type') == 'text':
-                return sub.get('text', '')
+                return sub.get('text') or ''
     return ''
 
 
@@ -503,6 +580,11 @@ _TASK_AGENT_LABELS = {}
 # before rendering the invoking chats; empty means "no link" (e.g. standalone).
 AGENT_HTML_MAP = {}
 
+# Dashboard of the chat being rendered (set per chat in generate_html; None when
+# standalone). Links to other chats go through it: chats move to Shorts/ or
+# Archived/ on their own, and the dashboard always knows where each one lives.
+_DASHBOARD_URL = None
+
 
 def _chat_agent_labels(messages: List[Dict]) -> dict:
     """Cross the Agent tool_uses (subagent_type + description) with their results
@@ -545,7 +627,10 @@ def render_task_notification(text: str, uuid: str) -> str:
     if task_id and task_id in _TASK_AGENT_LABELS:
         agent_suffix = f' <span style="opacity:0.75; font-weight:600;">&middot; {escape(_TASK_AGENT_LABELS[task_id])}</span>'
     if task_id and AGENT_HTML_MAP.get(task_id):
-        agent_suffix += f' <a href="{escape(AGENT_HTML_MAP[task_id])}" target="_blank" rel="noopener" class="agent-open" title="Open this agent&#39;s chat in a new tab">&#8599; open chat</a>'
+        # Through the dashboard (`#open=<agentId>`): a direct link by file name
+        # would break as soon as the agent's chat is archived apart from this one.
+        href = f'{_DASHBOARD_URL}#open={task_id}' if _DASHBOARD_URL else AGENT_HTML_MAP[task_id]
+        agent_suffix += f' <a href="{escape(href)}" target="_blank" rel="noopener" class="agent-open" title="Open this agent&#39;s chat in a new tab">&#8599; open chat</a>'
 
     # Style based on status
     if status_upper == 'COMPLETED':
@@ -769,18 +854,20 @@ def render_compact_block(compact_data: dict) -> str:
 
     inner_content = '\n'.join(content_parts)
 
-    # Unique ID for toggle
-    block_id = f'compact-{uuid[-8:]}' if uuid else f'compact-{id(compact_data)}'
-
+    # Native <details> handles the toggle — no per-block id. This kills the
+    # id-collision bug (a rewind duplicating the same compact entry made two
+    # blocks share an id, so the second toggle was inert) AND the HTML/JS
+    # injection via an unescaped id derived from the uuid. The ▶/▼ marker is CSS.
     return f'''<div class="message compact-msg nav-always" data-msg-uuid="{escape(uuid)}">
 <div class="compact-inner">
-<div class="msg-header compact-header" onclick="(function(){{ var c=document.getElementById('{block_id}'); c.style.display = c.style.display==='none'?'block':'none'; var t=document.getElementById('{block_id}-toggle'); t.textContent = c.style.display==='none'? '\\u25B6':'\\u25BC'; }})()" style="cursor:pointer;">
-<span id="{block_id}-toggle" style="font-size:12px; color:#8B5CF6;">&#9654;</span>
+<details class="compact-details">
+<summary class="msg-header compact-header">
 <span class="bullet" style="color:#8B5CF6;">&#128230;</span> <span class="label" style="color:#7C3AED;">[COMPACT]</span> <span style="color:#6D28D9; font-size:13px; margin-left:8px;">{escape(command_display)}</span> <span class="metadata">{time_str}</span>
-</div>
-<div id="{block_id}" class="compact-content" style="display:none; max-height:600px; overflow-y:auto; padding:8px 12px; margin-left:15px;">
+</summary>
+<div class="compact-content" style="padding:8px 12px; margin-left:15px;">
 {inner_content}
 </div>
+</details>
 </div>
 <div class="msg-footer">
 <span class="uuid-small">ID: {escape(uuid[-12:]) if uuid else 'N/A'}</span>
@@ -804,7 +891,7 @@ def group_compact_messages(messages: list) -> list:
         # Check if this is a compact summary message
         if (msg.get('message', {}).get('role') == 'user'
                 and not is_tool_result_message(msg.get('message', {}).get('content', []))
-                and is_compact_summary(text)):
+                and is_compact_summary_entry(msg)):
 
             # Start collecting compact-related messages
             compact_data = {
@@ -885,7 +972,7 @@ def format_tool_result_content(tool_result_data: Dict) -> str:
                     text = item.get('text', '')
                     parts.append(escape_html_preserve_structure(text))
                 else:
-                    parts.append(f"[{item.get('type')}]")
+                    parts.append(f"[{escape(str(item.get('type')))}]")
         return '<br>'.join(parts)
     else:
         return escape(str(content))
@@ -963,18 +1050,22 @@ def merge_btw_history_into_messages(messages: list, btw_entries: list) -> list:
             'timestamp_ms': ts_ms,
         })
 
-    pseudos.sort(key=lambda p: p['timestamp_ms'])
-
-    def msg_ts(m):
-        return m.get('timestamp', '') if isinstance(m, dict) else ''
+    # Each /btw goes right after the last message sent at or before it,
+    # comparing real instants (see _instant_ms). Insert from the back so the
+    # positions computed on the original list stay valid; equal positions keep
+    # their chronological order.
+    instants = [_instant_ms(m.get('timestamp')) if isinstance(m, dict) else None
+                for m in messages]
+    placed = []
+    for pseudo in pseudos:
+        insert_at = 0
+        for i, t in enumerate(instants):
+            if t is not None and t <= pseudo['timestamp_ms']:
+                insert_at = i + 1
+        placed.append((insert_at, pseudo['timestamp_ms'], pseudo))
 
     result = list(messages)
-    for pseudo in reversed(pseudos):
-        pseudo_ts = pseudo['timestamp']
-        insert_at = 0
-        for i, m in enumerate(result):
-            if msg_ts(m) and msg_ts(m) <= pseudo_ts:
-                insert_at = i + 1
+    for insert_at, _, pseudo in sorted(placed, key=lambda p: (p[0], p[1]), reverse=True):
         result.insert(insert_at, pseudo)
     return result
 
@@ -1152,12 +1243,12 @@ def format_content_item(item) -> str:
         return escape_html_preserve_structure(item)
 
     if not isinstance(item, dict):
-        return str(item)
+        return escape(str(item))
 
     item_type = item.get('type', '')
 
     if item_type == 'text':
-        text = item.get('text', '')
+        text = item.get('text') or ''
         if text.strip() == '(no content)':
             return ''
         return escape_html_preserve_structure(text)
@@ -1219,42 +1310,81 @@ def format_content_item(item) -> str:
                 return _image_link_html(data, media, size_kb, f'Open image ({media}, {size_kb} KB)')
         return '<div class="unknown-type">[Image]</div>'
 
-    if item_type == 'tool_result':
+    if item_type in ('tool_result', 'tool_addition'):
         return ''
 
-    return f'<div class="unknown-type">[Type: {item_type}]</div>'
+    if item_type == 'fallback':
+        # The service switched models mid-answer (e.g. a safety cut retried on
+        # another model): a real event of the conversation, not noise.
+        def _model(side):
+            v = item.get(side)
+            return str(v.get('model') or '?') if isinstance(v, dict) else '?'
+        return (f'<div class="unknown-type">[Model fallback: '
+                f'{escape(_model("from"))} &#8594; {escape(_model("to"))}]</div>')
+
+    if item_type == 'document':
+        # Attached documents (PDFs pasted into the prompt) arrive as base64. Name
+        # what it is instead of an anonymous placeholder; opening the file
+        # itself is not supported yet.
+        source = item.get('source') if isinstance(item.get('source'), dict) else {}
+        media = str(source.get('media_type') or 'document')
+        kind = 'PDF' if media == 'application/pdf' else media
+        data = source.get('data')
+        size = (f' · {max(1, len(data) * 3 // 4 // 1024)} KB'
+                if isinstance(data, str) and data else '')
+        title = item.get('title')
+        name = f' «{title}»' if title else ''
+        return f'<div class="unknown-type">[Document: {escape(kind)}{escape(name)}{size}]</div>'
+
+    return f'<div class="unknown-type">[Type: {escape(str(item_type))}]</div>'
 
 # Lines that are system/control text, not human conversation. Skipped when
 # labelling a rewind and when counting the real turns it discarded.
-_SYS_LINE_PREFIXES = ('<command-', '<local-command-', '<task-', '[Request interrupted', '[Image:')
+_SYS_LINE_PREFIXES = ('<system-reminder>', '<command-', '<local-command-', '<task-', '<bash-',
+                      '[Request interrupted', '[Image:')
+_OPENING_TAG_RE = re.compile(r'<([a-z][\w-]*)>')
 
 def _first_human_line(msg: Dict) -> str:
-    """First line of *human* conversation text in a message: skips blank lines,
-    whole <system-reminder>…</system-reminder> blocks and control markers
-    (commands, tool interruptions, image refs). Returns '' when the message
-    carries no human text (e.g. it only holds tool_use/tool_result/thinking) —
-    which is what tells a real conversation rewind apart from tool-call noise."""
+    """First line of *human* conversation text in a message: skips blank lines
+    and control text — system reminders, command and console blocks (with every
+    line they span, up to their closing tag), tool interruptions and image refs.
+    Returns '' when the message carries no human text (e.g. it only holds
+    tool_use/thinking), and also when format_message_html renders it hidden or
+    as a block without an anchor (tool results and their comments, task
+    notifications, caveats, console output, commands). That is what tells a real
+    conversation rewind apart from tool-call noise, and keeps rewind "Go"
+    targets on messages that render with an anchor. Mirrors the dispatch of
+    format_message_html: keep both in step."""
     md = msg.get('message', {})
     content = md.get('content') if isinstance(md, dict) else None
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):
-        text = '\n'.join(it.get('text', '') for it in content
+        if is_tool_result_message(content):
+            return ''
+        text = '\n'.join(it.get('text') or '' for it in content
                          if isinstance(it, dict) and it.get('type') == 'text')
     else:
         return ''
-    in_reminder = False
+    if md.get('role') == 'user':
+        lead = _get_text_from_content(content) or ''
+        if (is_caveat_message(lead) or is_task_notification(lead) or is_stdout_message(lead)
+                or parse_command_tags(lead) or is_image_source_message(content)
+                or is_tool_use_interrupted_message(content)):
+            return ''
+    closing = None   # closing tag of the multi-line control block being skipped
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line.startswith('<system-reminder>'):
-            in_reminder = '</system-reminder>' not in line
-            continue
-        if in_reminder:
-            in_reminder = '</system-reminder>' not in line
+        if closing:
+            if closing in line:
+                closing = None
             continue
         if any(line.startswith(p) for p in _SYS_LINE_PREFIXES):
+            m = _OPENING_TAG_RE.match(line)
+            if m and f'</{m.group(1)}>' not in line:
+                closing = f'</{m.group(1)}>'
             continue
         return line
     return ''
@@ -1270,15 +1400,11 @@ def format_message_html(msg: Dict, index: int, rewind_dest: dict = None) -> str:
         summary_text = msg.get('summary', '')
         leaf_uuid = msg.get('leafUuid', '')
         return f'''<div class="message summary-msg">
-<div class="summary-header">
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONVERSATION SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-</div>
+<div class="summary-header">CONVERSATION SUMMARY</div>
 <div class="summary-content">
 {escape(summary_text)}
 <br><br>
-<span class="uuid-small">Leaf UUID: {leaf_uuid[-12:]}</span>
+<span class="uuid-small">Leaf UUID: {escape(str(leaf_uuid)[-12:])}</span>
 </div>
 </div>
 '''
@@ -1306,7 +1432,7 @@ CONVERSATION SUMMARY
                  'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
                  '<path d="M8 12.5 V4 M4.5 7.5 L8 4 L11.5 7.5"/></svg>')
         goto = (f'<button type="button" class="rewind-goto" '
-                f'onclick="gotoMessage(\'{escape(dest_uuid)}\')" '
+                f'data-goto="{escape(dest_uuid)}" '
                 f'title="Go to where the conversation resumed">{arrow}<span>Go</span></button>')
         return (f'<div class="rewind">'
                 f'<span class="rewind-icon">&#8634;</span>'
@@ -1334,6 +1460,8 @@ CONVERSATION SUMMARY
         return ''
 
     # ====== DETECT SPECIAL USER MESSAGE TYPES ======
+    # _first_human_line mirrors this dispatch (what renders without an anchor):
+    # keep both in step.
     if role == 'user' and not is_tool_result_message(content):
         text = _get_text_from_content(content)
 
@@ -1387,7 +1515,7 @@ CONVERSATION SUMMARY
         user_comments = []
         for item in content:
             if isinstance(item, dict) and item.get('type') == 'text':
-                comment = item.get('text', '').strip()
+                comment = (item.get('text') or '').strip()
                 if comment:
                     user_comments.append(comment)
             elif isinstance(item, dict) and item.get('type') == 'tool_result':
@@ -1451,11 +1579,11 @@ CONVERSATION SUMMARY
         msg_class = 'assistant-msg'
     else:
         icon = '❓'
-        label = role.upper()
+        label = escape(str(role).upper())
         msg_class = 'other-msg'
 
     time_str = format_timestamp(timestamp)
-    # F2: model first, then the date/time in bold (the most useful anchor when
+    # Model first, then the date/time in bold (the most useful anchor when
     # scanning), then the branch. Each part is escaped on its own so the
     # <strong> wrapper is not escaped away by a global escape().
     meta_parts = []
@@ -1473,12 +1601,12 @@ CONVERSATION SUMMARY
     if isinstance(content, str):
         content_parts.append(escape_html_preserve_structure(content))
     elif isinstance(content, list):
-        # F1: render [Image #N] markers inline as links. Each distinct marker maps to
+        # Render [Image #N] markers inline as links. Each distinct marker maps to
         # one image by position (sorted markers <-> images in pasting order), so
         # non-consecutive numbers (#1 + #3) map correctly. The first `referenced`
         # images go inline; any extra image with no marker still gets its button.
         imgs = [it for it in content if isinstance(it, dict) and it.get('type') == 'image']
-        full_text = ' '.join(it.get('text', '') for it in content
+        full_text = ' '.join(it.get('text') or '' for it in content
                              if isinstance(it, dict) and it.get('type') == 'text')
         nums = sorted(set(int(n) for n in re.findall(r'\[Image #(\d+)\]', full_text)))
         inline_imgs = bool(imgs) and bool(nums)
@@ -1490,7 +1618,7 @@ CONVERSATION SUMMARY
                 shown_inline += 1
                 continue  # rendered inline inside the text
             if inline_imgs and isinstance(item, dict) and item.get('type') == 'text':
-                formatted = _render_text_with_inline_images(item.get('text', ''), imgs, nums)
+                formatted = _render_text_with_inline_images(item.get('text') or '', imgs, nums)
             else:
                 formatted = format_content_item(item)
             if formatted:
@@ -1563,6 +1691,62 @@ def render_queued_message(msg, index, rewind_dest=None):
     return format_message_html(synthetic, index, rewind_dest)
 
 
+def _error_block(title: str, meta: str, detail: str, uuid: str = '') -> str:
+    """A visible red marker used when a line can't be parsed or a message can't be
+    rendered. Keeps CCV's promise: a format change degrades to a local, visible
+    block — never a silent drop, never a lost chat."""
+    return (f'<div class="message render-error nav-always" data-msg-uuid="{escape(str(uuid))}">'
+            f'<div class="msg-content" style="color:#B91C1C; background:#FEF2F2; '
+            f'border-left:3px solid #DC2626; padding:6px 12px; margin-left:15px; '
+            f'font-size:12px; border-radius:4px;">'
+            f'<span style="font-weight:700;">&#9888; {escape(title)}</span> '
+            f'<span style="opacity:.75;">{escape(meta)}</span> &mdash; {escape(detail)}'
+            f'</div><div class="separator"></div></div>\n')
+
+
+def render_parse_error(msg: dict) -> str:
+    """Render a malformed JSONL line (couldn't be JSON-decoded) as a visible block."""
+    line = msg.get('_line_number', '')
+    meta = f"[line {line}]" if line else ""
+    return _error_block("CCV parse error", meta, str(msg.get('_error', 'invalid JSON')))
+
+
+def render_message_error(msg, index, exc) -> str:
+    """Render a message whose renderer raised — in isolation — as a visible block,
+    so one unexpected shape never aborts the whole chat."""
+    uuid = msg.get('uuid', '') if isinstance(msg, dict) else ''
+    mtype = msg.get('type', '?') if isinstance(msg, dict) else type(msg).__name__
+    line = msg.get('_line_number', '') if isinstance(msg, dict) else ''
+    meta = f"[{mtype}" + (f" · line {line}" if line else "") + "]"
+    return _error_block("CCV render error", meta, f"{type(exc).__name__}: {exc}", str(uuid))
+
+
+def render_fork_banner(fork_info: dict, dashboard_url: str = None) -> str:
+    """Banner for a chat that is a branch (fork) of another session.
+
+    The link goes through the dashboard (`<dashboard>#open=<origin session>`)
+    instead of pointing at the origin's HTML directly: chats move between
+    Chats/, Shorts/ and Archived/ after they are generated, so a direct relative
+    link would break as soon as either file moved, while the dashboard always
+    knows where every chat currently lives (and its own link is kept up to date
+    on every move). Without a dashboard (standalone run) the banner only names
+    the origin session.
+    """
+    sid = str((fork_info or {}).get('sessionId') or '')
+    icon = '<span class="fork-icon">&#9095;</span>'   # ⎇ branch
+    if dashboard_url and sid:
+        tail = (f'<a class="fork-link" href="{escape(dashboard_url + "#open=" + sid)}">'
+                f'open the origin session &#8599;</a>')
+    elif sid:
+        tail = f'<span class="fork-sid">session {escape(sid[:8])}</span>'
+    else:
+        tail = ''
+    sep = '<span class="fork-sep">&middot;</span>' if tail else ''
+    return (f'<div class="fork-banner">{icon}'
+            f'<span class="fork-label">Forked from a previous session</span>'
+            f'{sep}{tail}</div>\n')
+
+
 def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = None, chat_title: str = "", chat_uuid: str = "", history_entries=None, time_format: str = "12h", agent_of: str = None):
     """Generate the complete HTML document in terminal style.
 
@@ -1573,13 +1757,32 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
 
     `time_format` controls the time portion of timestamps: "12h" (AM/PM,
     default) or "24h".
+
+    A chat branched off another session (Claude Code stamps `forkedFrom` on its
+    entries) opens with a banner linking to the origin through the dashboard.
     """
-    global TIME_FORMAT, _TASK_AGENT_LABELS
+    global TIME_FORMAT, _TASK_AGENT_LABELS, _DASHBOARD_URL
     TIME_FORMAT = time_format if time_format in ("12h", "24h") else "12h"
+    _DASHBOARD_URL = dashboard_url
+    # A rewind can re-emit a whole segment with identical uuids; drop the repeats so
+    # each message renders once (kills duplicated content and duplicated anchors).
+    messages = dedup_reemitted_messages(messages)
+    total_lines = len(messages)
+    # Every entry with an id, so the walk back to a rewind's destination goes
+    # through the attachments and bookkeeping entries Claude Code interleaves
+    # between messages.
+    parent_of = {}
+    for m in messages:
+        if isinstance(m, dict) and m.get('uuid'):
+            parent_of.setdefault(m['uuid'], m.get('parentUuid'))
+    # Bookkeeping entries neither render nor count (see _NEVER_RENDERED_TYPES).
+    messages = [m for m in messages
+                if not (isinstance(m, dict) and m.get('type') in _NEVER_RENDERED_TYPES)]
     _TASK_AGENT_LABELS = _chat_agent_labels(messages)
+    fork_info = next((m.get('forkedFrom') for m in messages
+                      if isinstance(m, dict) and isinstance(m.get('forkedFrom'), dict)), None)
 
     # Count statistics (distinguishing tool_results)
-    total_lines = len(messages)
     real_user_msgs = 0
     tool_result_msgs = 0
     assistant_msgs = 0
@@ -1594,12 +1797,10 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
             content = m.get('message', {}).get('content', [])
             if is_tool_result_message(content):
                 tool_result_msgs += 1
+            elif is_compact_summary_entry(m):
+                summaries += 1
             else:
-                text = _get_message_text(m)
-                if is_compact_summary(text):
-                    summaries += 1
-                else:
-                    real_user_msgs += 1
+                real_user_msgs += 1
         elif m.get('message', {}).get('role') == 'assistant':
             assistant_msgs += 1
 
@@ -1615,7 +1816,7 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
 
     btw_count = sum(1 for m in processed_messages if isinstance(m, dict) and m.get('_btw_inline_history'))
 
-    # F3: detect conversation rewinds. A real rewind = an abandoned prompt with
+    # Detect conversation rewinds. A real rewind = an abandoned prompt with
     # human text whose parent has a LATER sibling that is also human text (the
     # retry); forks made only of tool_use/tool_result are ignored. The label is
     # the nearest ancestor with human text; N is how many human messages sit
@@ -1640,11 +1841,12 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
         if not later:
             return None  # no human retry after it -> active branch, not a rewind
         cur, seen = node['parent'], set()
-        while cur and cur in msg_nodes and cur not in seen:
+        while cur and cur not in seen:
             seen.add(cur)
-            if msg_nodes[cur]['line']:
+            nd = msg_nodes.get(cur)
+            if nd and nd['line']:
                 return cur
-            cur = msg_nodes[cur]['parent']
+            cur = parent_of.get(cur)
         return None
 
     rewind_dest = {}
@@ -1661,23 +1863,31 @@ def generate_html(messages: List[Dict], output_file: str, dashboard_url: str = N
 
     # Generate HTML for all messages
     messages_html = []
+    if fork_info:
+        messages_html.append(render_fork_banner(fork_info, dashboard_url))
     shown_rewind_mids = set()
     for i, msg in enumerate(processed_messages):
-        # F3: render only snapshots that are real rewinds (skip guards/duplicates)
+        # Render only snapshots that are real rewinds (skip guards/duplicates)
         if isinstance(msg, dict) and msg.get('type') == 'file-history-snapshot':
             mid = msg.get('messageId', '')
             if mid not in rewind_dest or mid in shown_rewind_mids:
                 continue
             shown_rewind_mids.add(mid)
-        # Compact groups are rendered directly
-        if isinstance(msg, dict) and msg.get('_compact_group'):
-            msg_html = render_compact_block(msg)
-        elif isinstance(msg, dict) and msg.get('_btw_inline_history'):
-            msg_html = render_btw_history_message(msg)
-        elif is_queued_user_message(msg):
-            msg_html = render_queued_message(msg, i, rewind_dest)
-        else:
-            msg_html = format_message_html(msg, i, rewind_dest)
+        # Each message renders in ISOLATION: a renderer that raises on an unexpected
+        # shape degrades to a visible error block instead of aborting the whole chat.
+        try:
+            if isinstance(msg, dict) and msg.get('type') == '_parse_error':
+                msg_html = render_parse_error(msg)
+            elif isinstance(msg, dict) and msg.get('_compact_group'):
+                msg_html = render_compact_block(msg)
+            elif isinstance(msg, dict) and msg.get('_btw_inline_history'):
+                msg_html = render_btw_history_message(msg)
+            elif is_queued_user_message(msg):
+                msg_html = render_queued_message(msg, i, rewind_dest)
+            else:
+                msg_html = format_message_html(msg, i, rewind_dest)
+        except Exception as exc:
+            msg_html = render_message_error(msg, i, exc)
         if msg_html:
             messages_html.append(msg_html)
 
@@ -1731,8 +1941,9 @@ Website: https://nucleoia.es
 License: MIT License
 
 This HTML file was generated by Code Chat Viewer, an open-source tool
-for converting Claude Code, VS Code, and Visual Studio Code chat logs (JSONL)
-into readable, professional HTML visualizations with terminal-style aesthetics.
+for converting Claude Code chat logs (JSONL), from the CLI or the VS Code
+extension, into readable, professional HTML visualizations with terminal-style
+aesthetics.
 
 Learn more: https://github.com/oskar-gm/code-chat-viewer
 Developer: https://nucleoia.es
@@ -1746,7 +1957,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <!-- SEO Meta Tags -->
-    <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, VS Code, and AI coding assistants.">
+    <meta name="description" content="Claude Code conversation visualization - Convert JSONL chat logs to professional HTML. Export AI coding conversations with terminal-style UI, collapsible tool results, conversation filter, and interactive dashboard. Works with Claude Code, in the terminal or in VS Code.">
     <meta name="keywords" content="Claude Code, Claude Code history, chat history, conversation history, claude code chat history, chat viewer, conversation export, JSONL to HTML, AI chat visualization, Claude Code logs, export claude code chats, chat log viewer, VS Code chat export, developer tools, Claude AI, AI conversation viewer, terminal UI, chat dashboard">
 
     <meta name="generator" content="Code Chat Viewer v{APP_VERSION} - https://github.com/oskar-gm/code-chat-viewer">
@@ -1937,10 +2148,15 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             display: flex;
             align-items: center;
             gap: 15px;
+            /* Narrow windows: the controls wrap to a second line instead of
+               squeezing the search box to nothing. */
+            flex-wrap: wrap;
+            row-gap: 8px;
         }}
 
         .search-input {{
-            flex: 1;
+            flex: 1 1 200px;
+            min-width: 200px;
             padding: 8px 12px;
             border: 1px solid #CCCCCC;
             border-radius: 4px;
@@ -2115,6 +2331,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             color: #10893E;
             opacity: 1;
         }}
+        .copy-btn.copy-failed {{
+            color: #C0392B;
+            opacity: 1;
+        }}
         .copy-btn svg {{
             width: 14px;
             height: 14px;
@@ -2254,6 +2474,9 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             border-radius: 3px;
             color: #333;
             font-size: 12px;
+            /* Long blocks scroll inside, so an open one never buries the chat. */
+            max-height: 55vh;
+            overflow-y: auto;
         }}
 
         .tool-result-msg > .msg-content.expanded {{
@@ -2297,6 +2520,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .thinking-content {{
             padding: 6px 8px 5px;
             border-top: 1px solid #E0E8E0;
+            max-height: 55vh;
+            overflow-y: auto;
         }}
 
         .tool-use {{
@@ -2319,6 +2544,15 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             border-top: 1px solid #5A5A5C;
             word-wrap: break-word;
             overflow-wrap: break-word;
+            max-height: 55vh;
+            overflow-y: auto;
+        }}
+        /* Edit and Write cap each of their code panes instead, so the block
+           itself must not scroll too: one level of scroll, never two. */
+        .tool-use-edit > .tool-use-content,
+        .tool-use-write > .tool-use-content {{
+            max-height: none;
+            overflow-y: visible;
         }}
 
         .tool-use-hint {{
@@ -2549,7 +2783,6 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
            .edit-ctrl-group so it outweighs the generic .edit-ctrl-btn rules
            without touching the neighbouring Edits/Writes button. */
         .edit-ctrl-group .edit-ctrl-btn-theme {{
-            border-left-width: 0 !important;
             background: #5E5E5E;
             border-color: #787878;
             color: #F5F5F5;
@@ -2591,6 +2824,17 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             font-size: 10px;
             font-family: 'Consolas', monospace;
             line-height: 1;
+        }}
+
+        /* Edits/Writes button while any Edit/Write block is open. */
+        .edit-ctrl-btn.is-open {{
+            background: #E6F4EA;
+            border-color: #8BC79A;
+            color: #1E6B34;
+        }}
+        .edit-ctrl-btn.is-open:hover {{
+            background: #D7EEDD;
+            border-color: #6FB582;
         }}
 
         .edit-ctrl-group .edit-ctrl-btn-theme.is-light {{
@@ -2648,6 +2892,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             color: #6AB06F;
         }}
 
+        .chat-uuid-copy.copy-failed {{
+            color: #E57373;
+        }}
+
         @media (max-width: 900px) {{
             .chat-uuid-wrap {{
                 display: none;
@@ -2675,17 +2923,44 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             margin: 6px 0;
         }}
 
+        /* The rules above and below the title are borders, so they span the
+           block at any window width. */
         .summary-header {{
             color: #666;
             font-size: 11px;
             margin-bottom: 4px;
-            letter-spacing: -0.5px;
+            padding: 2px 0;
+            border-top: 2px solid #9A9A9A;
+            border-bottom: 2px solid #9A9A9A;
         }}
 
         .summary-content {{
             color: #1E1E1E;
             padding-left: 8px;
         }}
+
+        /* Fork banner: this chat continues a branch of another session. Its own
+           colour (emerald "branch" green), distinct from the compact purple and
+           the rewind teal. */
+        .fork-banner {{
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin: 2px 0 10px;
+            padding: 6px 12px;
+            border: 1px solid #6EE7B7;
+            border-left: 4px solid #059669;
+            border-radius: 5px;
+            background: #ECFDF5;
+            color: #065F46;
+            font-size: 12.5px;
+        }}
+        .fork-icon {{ font-size: 15px; line-height: 1; flex-shrink: 0; color: #059669; }}
+        .fork-label {{ font-weight: 600; }}
+        .fork-sep {{ color: #6EE7B7; }}
+        .fork-sid {{ color: #3F8A6E; font-style: italic; }}
+        .fork-link {{ color: #047857; font-weight: 600; text-decoration: none; }}
+        .fork-link:hover {{ text-decoration: underline; }}
 
         .rewind {{
             display: flex;
@@ -2889,6 +3164,18 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         .compact-msg .compact-header:hover {{
             opacity: 0.85;
         }}
+        .compact-details > summary {{
+            cursor: pointer;
+            list-style: none;
+        }}
+        .compact-details > summary::-webkit-details-marker {{ display: none; }}
+        .compact-details > summary::before {{
+            content: "\\25B6";
+            font-size: 12px;
+            color: #8B5CF6;
+            flex: none;
+        }}
+        .compact-details[open] > summary::before {{ content: "\\25BC"; }}
 
         /* AskUserQuestion result */
         .ask-result-msg {{
@@ -3092,6 +3379,16 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 </head>
 <body>
     <div id="chatLoading" class="chat-loading"><div class="chat-loading-spin"></div><div class="chat-loading-msg">Loading your chat… hang tight!</div></div>
+    <noscript><style>.chat-loading {{ display: none !important; }}</style></noscript>
+    <script>
+        /* Fail-safe, independent of the main script: if that script breaks, the
+           loading overlay must not stay up and hide the whole chat. */
+        (function() {{
+            function drop() {{ var l = document.getElementById('chatLoading'); if (l) l.remove(); }}
+            window.addEventListener('error', drop);
+            window.addEventListener('load', function() {{ setTimeout(drop, 2000); }});
+        }})();
+    </script>
     <div class="container">
         <div class="terminal-header">
             <div class="terminal-title">
@@ -3102,7 +3399,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 {('<span class="agent-chip" title="Agent chat &mdash; a sub-chat launched by the Task tool, invoked by session ' + escape(agent_of) + '">AGENT CHAT</span>') if agent_of else ''}
             </div>
             <div class="header-actions">
-                {('<span class="chat-uuid-wrap" title="Chat UUID"><span class="chat-uuid">' + escape(chat_uuid) + '</span><button class="chat-uuid-copy" onclick="copyChatUuid(this)" title="Copy UUID"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/></svg></button></span>') if chat_uuid else ''}
+                {('<span class="chat-uuid-wrap" title="Chat UUID"><span class="chat-uuid">' + escape(chat_uuid) + '</span><button class="chat-uuid-copy" onclick="copyChatUuid(this)" title="Copy UUID"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></span>') if chat_uuid else ''}
                 {header_actions_html}
             </div>
             <div class="terminal-controls">
@@ -3153,8 +3450,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 <button class="nav-mode-btn" id="navAssistant" title="Assistant messages">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>
                 </button>
+                <button class="nav-arrow-btn" id="firstMsg" title="First message">&#10514;</button>
                 <button class="nav-arrow-btn" id="prevMsg" title="Previous (P)">&#9650;</button>
                 <button class="nav-arrow-btn" id="nextMsg" title="Next (N)">&#9660;</button>
+                <button class="nav-arrow-btn" id="lastMsg" title="Last message">&#10515;</button>
                 <span class="nav-counter" id="navCounter">0/0</span>
             </div>
         </div>
@@ -3177,14 +3476,15 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         let navMode = 'all';
         let observerActive = true;
         let navObserver = null;
+        let navSuppressUntil = 0;    // time stamp: ignore observer batches born before it
+        let navResumeTimer = null;   // single pending re-arm (no overlapping timeouts)
 
         // ====== STATE PERSISTENCE (per-open, sessionStorage) ======
         // Persists the controls a reader expects to survive a refresh (F5): scroll
         // position, theme of the Edit/Write diffs, the user/bot/all selector, the
-        // search box + "Messages only", and which Edit/Write blocks are open. Uses
-        // sessionStorage on purpose — state survives a reload but is wiped when the
-        // tab closes, so reopening the chat starts clean. Thinking and other
-        // non-button <details> are never persisted.
+        // search box + "Messages only", and which Edit/Write blocks are open, in
+        // sessionStorage. Thinking and other non-button <details> are never
+        // persisted.
         const CHAT_STATE_KEY = 'ccv-chat-state-' + {chat_state_key};
         // Memory survives a refresh (F5 / back-forward) but a fresh open starts
         // clean. sessionStorage alone isn't enough — a file:// reopen can reuse it
@@ -3241,7 +3541,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
 
         function initNavigation() {{
-            navMessages = Array.from(document.querySelectorAll(getNavSelector()));
+            // Hidden stops are NOT navigable: with a filter active, keeping them
+            // in the list made prev/next jump to invisible messages (the view
+            // stayed put and the counter lied about where the reader was).
+            navMessages = Array.from(document.querySelectorAll(getNavSelector()))
+                .filter(el => !(el.style && el.style.display === 'none'));
             currentNavIndex = -1;
             updateNavCounter();
             setupScrollObserver();
@@ -3259,7 +3563,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         function scrollToNavMessage(index) {{
             if (navMessages.length === 0) return;
             observerActive = false;
-            navMessages.forEach(msg => msg.classList.remove('nav-highlight'));
+            // Observer batches born in the next 150 ms belong to this jump: they
+            // are ignored by time stamp, not by a guessed window — frames around a
+            // huge message can take longer than any fixed delay.
+            navSuppressUntil = performance.now() + 150;
+            // Any highlight, not only the stops: a Go jump may have marked an
+            // element that is not (or no longer) a navigation stop.
+            document.querySelectorAll('.nav-highlight').forEach(el => el.classList.remove('nav-highlight'));
             currentNavIndex = index;
             const targetMsg = navMessages[currentNavIndex];
             const container = document.getElementById('terminalContent');
@@ -3267,37 +3577,76 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             targetMsg.scrollIntoView({{ behavior: 'auto', block }});
             targetMsg.classList.add('nav-highlight');
             updateNavCounter();
-            setTimeout(() => {{ observerActive = true; }}, 100);
+            if (navResumeTimer) clearTimeout(navResumeTimer);   // no overlapping timers
+            navResumeTimer = setTimeout(() => {{ observerActive = true; }}, 100);
         }}
 
-        // The "current" position is recomputed from the actual scroll position
-        // every time, so prev/next always step from what the user is looking at —
-        // reliable even after a native Ctrl+F jump or manual scrolling, when
-        // currentNavIndex (kept loosely by the observer, and -1 until a message
-        // crosses its 0.5 threshold) would otherwise send the jump to an extreme.
+        // Geometry of a stop for navigation math; null when it is not laid out
+        // (zero height: hidden or collapsed), so it never wins a position check.
+        function stopRect(el) {{
+            const r = el.getBoundingClientRect();
+            return r.height > 0 ? r : null;
+        }}
+
+        // Fallback "current position" from the scroll when there is no usable
+        // memory (fresh open, Ctrl+F, manual scrolling away). Edge-aware: stops
+        // hugging the top/bottom of the scroll can never reach the viewport
+        // centre, so at the extremes the first/last VISIBLE stop is the position;
+        // elsewhere, a stop that covers the viewport centre wins outright (a huge
+        // message filling the screen IS the position), then centre distance.
         function currentNavIndexFromScroll() {{
             if (navMessages.length === 0) return -1;
             const container = document.getElementById('terminalContent');
             const cRect = container.getBoundingClientRect();
+            if (container.scrollTop <= 2) {{
+                for (let i = 0; i < navMessages.length; i++) {{
+                    const r = stopRect(navMessages[i]);
+                    if (r && r.bottom > cRect.top + 1) return i;
+                }}
+            }}
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {{
+                for (let i = navMessages.length - 1; i >= 0; i--) {{
+                    const r = stopRect(navMessages[i]);
+                    if (r && r.top < cRect.bottom - 1) return i;
+                }}
+            }}
             const cMid = cRect.top + cRect.height / 2;
-            let best = 0, bestDist = Infinity;
+            let best = -1, bestDist = Infinity;
             for (let i = 0; i < navMessages.length; i++) {{
-                const r = navMessages[i].getBoundingClientRect();
-                const dist = Math.abs((r.top + r.height / 2) - cMid);
+                const r = stopRect(navMessages[i]);
+                if (!r) continue;
+                const dist = (r.top <= cMid && r.bottom >= cMid)
+                    ? 0 : Math.abs((r.top + r.height / 2) - cMid);
                 if (dist < bestDist) {{ bestDist = dist; best = i; }}
             }}
-            return best;
+            return best === -1 ? 0 : best;
+        }}
+
+        // Step base for prev/next: REMEMBER the last navigated/observed stop while
+        // it is still on screen — walking near the top edge no longer skips the
+        // first stops (they can never reach the viewport centre), and a message
+        // taller than the screen no longer traps the walk. Only when the reader
+        // moved away (its stop left the viewport, or the filter re-initialised)
+        // does the scroll-based fallback take over.
+        function navStepBase() {{
+            if (currentNavIndex >= 0 && currentNavIndex < navMessages.length) {{
+                const container = document.getElementById('terminalContent');
+                const c = container.getBoundingClientRect();
+                const r = stopRect(navMessages[currentNavIndex]);
+                if (r && r.bottom > c.top && r.top < c.bottom) return currentNavIndex;
+            }}
+            return currentNavIndexFromScroll();
         }}
 
         function goToPrev() {{
             if (navMessages.length === 0) return;
-            const base = currentNavIndexFromScroll();
+            const base = navStepBase();
             scrollToNavMessage(base <= 0 ? navMessages.length - 1 : base - 1);
         }}
 
         function goToNext() {{
             if (navMessages.length === 0) return;
-            const base = currentNavIndexFromScroll();
+            const base = navStepBase();
             scrollToNavMessage(base >= navMessages.length - 1 ? 0 : base + 1);
         }}
 
@@ -3314,6 +3663,13 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         // Navigation buttons
         document.getElementById('prevMsg').addEventListener('click', goToPrev);
         document.getElementById('nextMsg').addEventListener('click', goToNext);
+        // First / last stop of the current mode (all, user or assistant).
+        document.getElementById('firstMsg').addEventListener('click', () => {{
+            if (navMessages.length) scrollToNavMessage(0);
+        }});
+        document.getElementById('lastMsg').addEventListener('click', () => {{
+            if (navMessages.length) scrollToNavMessage(navMessages.length - 1);
+        }});
         document.getElementById('navAll').addEventListener('click', () => setNavMode('all'));
         document.getElementById('navUser').addEventListener('click', () => setNavMode('user'));
         document.getElementById('navAssistant').addEventListener('click', () => setNavMode('assistant'));
@@ -3321,6 +3677,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         // Keyboard shortcuts (N = next, P = previous)
         document.addEventListener('keydown', function(e) {{
             if (e.target.tagName === 'INPUT') return;
+            // Plain N / P only: Ctrl+P is the browser's print, Cmd+N a new window.
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (e.key === 'n' || e.key === 'N') goToNext();
             if (e.key === 'p' || e.key === 'P') goToPrev();
         }});
@@ -3329,17 +3687,21 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         function setupScrollObserver() {{
             const container = document.getElementById('terminalContent');
             if (navObserver) navObserver.disconnect();
+            // The observer only signals "something crossed visibility"; the index
+            // itself is recomputed with the same edge-aware geometry as the manual
+            // fallback. Assigning it per entry ("last stop >50% visible wins")
+            // poisoned the memory: the initial batch fired right after every init,
+            // so the first prev/next skipped the opening messages, and late batches
+            // around huge messages trapped the walk below them.
             navObserver = new IntersectionObserver((entries) => {{
                 if (!observerActive) return;
-                entries.forEach(entry => {{
-                    if (entry.isIntersecting && entry.intersectionRatio > 0.5) {{
-                        const visibleIndex = navMessages.indexOf(entry.target);
-                        if (visibleIndex !== -1 && visibleIndex !== currentNavIndex) {{
-                            currentNavIndex = visibleIndex;
-                            updateNavCounter();
-                        }}
-                    }}
-                }});
+                if (performance.now() < navSuppressUntil) return;   // late post-jump batch
+                if (!entries.some(en => en.isIntersecting && en.intersectionRatio > 0.5)) return;
+                const idx = currentNavIndexFromScroll();
+                if (idx !== -1 && idx !== currentNavIndex) {{
+                    currentNavIndex = idx;
+                    updateNavCounter();
+                }}
             }}, {{
                 root: container,
                 threshold: 0.5
@@ -3368,14 +3730,27 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             let visibleCount = 0;
             messages.forEach(message => {{
                 let show = message.textContent.toLowerCase().includes(searchTerm);
-                if (show && msgsOnly && !isConversationMsg(message)) show = false;
+                // Render/parse errors stay visible even under "Messages only": a
+                // defect signal must never be hidden by a filter (only by search).
+                if (show && msgsOnly && !isConversationMsg(message)
+                        && !message.classList.contains('render-error')) show = false;
                 message.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
             }});
-            console.log(`Showing ${{visibleCount}} of ${{messages.length}} messages`);
             saveChatState({{ search: document.getElementById('searchInput').value, messagesOnly: msgsOnly }});
+            // The set of navigable stops just changed: rebuild it so prev/next
+            // and the counter walk only what is actually on screen.
+            initNavigation();
         }}
-        document.getElementById('searchInput').addEventListener('input', applyConversationFilter);
+        // Typing waits ~150 ms before filtering: each pass walks every message's
+        // text, which on a chat of tens of MB made every keystroke stall. The
+        // "Messages only" toggle is a single click, so it applies at once.
+        let filterTimer = null;
+        function scheduleConversationFilter() {{
+            clearTimeout(filterTimer);
+            filterTimer = setTimeout(applyConversationFilter, 150);
+        }}
+        document.getElementById('searchInput').addEventListener('input', scheduleConversationFilter);
         document.getElementById('messagesOnly').addEventListener('change', applyConversationFilter);
 
         // Toggle for collapsible tool results — the `▶` marker is already in
@@ -3387,24 +3762,46 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 const toggle = header && header.querySelector(':scope > .tool-result-toggle');
                 if (!header || !content || !toggle) return;
 
+                // Keyboard too: focusable, and Enter / Space toggle like a button.
+                header.tabIndex = 0;
+                header.setAttribute('role', 'button');
+                header.setAttribute('aria-expanded', 'false');
                 header.addEventListener('click', function() {{
                     const open = content.classList.toggle('expanded');
                     toggle.classList.toggle('expanded', open);
+                    header.setAttribute('aria-expanded', open ? 'true' : 'false');
+                }});
+                header.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Enter' || e.key === ' ') {{
+                        e.preventDefault();
+                        header.click();
+                    }}
                 }});
             }});
         }});
 
         // ====== Chat UUID: copy to clipboard ======
+        // Brief feedback on a copy button: green when the copy worked, red when it
+        // failed. The original icon is kept once, so a second click while the
+        // feedback shows cannot freeze the button on it.
+        function flashCopyButton(btn, symbol, failed) {{
+            if (btn.dataset.icon === undefined) btn.dataset.icon = btn.innerHTML;
+            clearTimeout(btn._copyTimer);
+            btn.innerHTML = symbol;
+            btn.classList.remove('copied', 'copy-failed');
+            btn.classList.add(failed ? 'copy-failed' : 'copied');
+            btn._copyTimer = setTimeout(function() {{
+                btn.innerHTML = btn.dataset.icon;
+                btn.classList.remove('copied', 'copy-failed');
+            }}, 1200);
+        }}
+
         function copyChatUuid(btn) {{
             const uuid = btn.parentNode.querySelector('.chat-uuid').textContent;
             navigator.clipboard.writeText(uuid).then(function() {{
-                const orig = btn.innerHTML;
-                btn.innerHTML = '✓';
-                btn.classList.add('copied');
-                setTimeout(function() {{
-                    btn.innerHTML = orig;
-                    btn.classList.remove('copied');
-                }}, 1200);
+                flashCopyButton(btn, '✓');
+            }}, function() {{
+                flashCopyButton(btn, '✗', true);
             }});
         }}
 
@@ -3418,6 +3815,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 const blocks = getBlocks();
                 const anyOpen = Array.from(blocks).some(d => d.open);
                 icon.innerHTML = anyOpen ? '&#9660;' : '&#9654;';
+                btn.classList.toggle('is-open', anyOpen);
             }};
             btn.addEventListener('click', function() {{
                 const blocks = getBlocks();
@@ -3482,7 +3880,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         }}
         // Scroll to a message by uuid and highlight it (used by the rewind button).
         function gotoMessage(uuid) {{
-            var target = document.querySelector('[data-msg-uuid="' + uuid + '"]');
+            var sel = (window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid;
+            var target = document.querySelector('[data-msg-uuid="' + sel + '"]');
             if (!target) {{ showNavToast("Couldn't locate that point in the chat"); return; }}
             // If an active filter (search / "Messages only") hides the target,
             // scrollIntoView would do nothing — clear the filter first so the
@@ -3501,6 +3900,12 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             target.scrollIntoView({{ behavior: 'smooth', block: block }});
             target.classList.add('nav-highlight');
         }}
+        // Rewind "Go" buttons carry their destination in data-goto (no inline
+        // handler, so a malicious uuid cannot inject JS); one delegated listener.
+        document.addEventListener('click', function(e) {{
+            var btn = e.target.closest ? e.target.closest('.rewind-goto') : null;
+            if (btn && btn.dataset.goto) gotoMessage(btn.dataset.goto);
+        }});
         // Open an embedded image (base64) in a modal/lightbox. The image is
         // decoded to a Blob URL on click, shown in an overlay, and the URL is
         // revoked on close to free memory. Focus moves into the dialog and
@@ -3546,6 +3951,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         document.addEventListener('DOMContentLoaded', function() {{
             var COPY = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.3"/><path d="M3 10.5V3.2A1.2 1.2 0 0 1 4.2 2H11"/></svg>';
             var CHECK = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.3 3.3L13 4.5"/></svg>';
+            var CROSS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
             document.querySelectorAll('.message').forEach(function(msg) {{
                 var content = msg.querySelector('.msg-content');
                 if (!content) return;
@@ -3557,9 +3963,9 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 btn.addEventListener('click', function(e) {{
                     e.stopPropagation();
                     navigator.clipboard.writeText(content.innerText).then(function() {{
-                        btn.innerHTML = CHECK;
-                        btn.classList.add('copied');
-                        setTimeout(function() {{ btn.innerHTML = COPY; btn.classList.remove('copied'); }}, 1200);
+                        flashCopyButton(btn, CHECK);
+                    }}, function() {{
+                        flashCopyButton(btn, CROSS, true);
                     }});
                 }});
                 msg.appendChild(btn);
@@ -3575,8 +3981,12 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 </body>
 </html>'''
 
-    with open(output_file, 'w', encoding='utf-8') as f:
+    # Atomic write: render to a sibling temp file and replace in place, so a crash
+    # mid-write (or a failed render) never truncates or corrupts an existing HTML.
+    tmp_file = output_file + '.tmp'
+    with open(tmp_file, 'w', encoding='utf-8') as f:
         f.write(html_template)
+    os.replace(tmp_file, output_file)
 
     print(f"HTML generated successfully: {output_file}")
     print(f"Statistics:")
@@ -3659,7 +4069,7 @@ def main():
     try:
         history_path = Path(input_file).resolve().parent.parent.parent / 'history.jsonl'
         if history_path.exists():
-            with open(history_path, 'r', encoding='utf-8') as f:
+            with open(history_path, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     try:
                         e = json.loads(line)

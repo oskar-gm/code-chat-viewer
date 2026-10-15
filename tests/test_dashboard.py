@@ -126,6 +126,8 @@ def test_generate_index_toolbar_rediseno(mgr, dashboard_sandbox):
     assert "scope-check" in html  # selector directo (sin popover)
     # Select sigue presente (modo selección clásico restaurado).
     assert "selectModeBtn" in html
+    # El bloque Search/Clear va a la IZQUIERDA de Select/Delete en la toolbar.
+    assert html.index('id="searchToggle"') < html.index('id="selectModeBtn"')
     # Overlay de carga (anti doble-salto al restaurar estado).
     assert 'id="dashLoading"' in html
 
@@ -262,3 +264,162 @@ def test_dashboard_boton_mas_btw_audit(mgr, dashboard_sandbox):
     assert 'href="btw.html"' in html
     assert "CCV-Audit 2026-06-19 10-00" in html
     assert 'data-html="btw.html"' not in html  # no es una fila de chat
+
+
+def test_dashboard_embebe_custom_assets_locales(mgr, dashboard_sandbox, monkeypatch, tmp_path):
+    """Punto de extensión local: si existen custom/dashboard.css y
+    custom/dashboard.js (carpeta gitignorada), sus contenidos se embeben en el
+    dashboard — CSS al final del <head>, JS al final del <body>. Sin ellos, el
+    dashboard no cambia."""
+    config, output_dir, _ = dashboard_sandbox
+    custom = tmp_path / "custom-assets"
+    custom.mkdir()
+    monkeypatch.setattr(mgr, "CUSTOM_DIR", custom)
+
+    # Sin archivos: nada embebido.
+    mgr.generate_index(config)
+    html = (output_dir / "CCV-Dashboard.html").read_text(encoding="utf-8")
+    assert "custom/dashboard.css (local)" not in html
+    assert "custom/dashboard.js (local)" not in html
+
+    # Con archivos: contenido embebido verbatim en su zona.
+    (custom / "dashboard.css").write_text(
+        "body.mi-tweak tr { display: none; }", encoding="utf-8")
+    (custom / "dashboard.js").write_text(
+        "console.log('mi-tweak-local');", encoding="utf-8")
+    mgr.generate_index(config)
+    html = (output_dir / "CCV-Dashboard.html").read_text(encoding="utf-8")
+    assert "body.mi-tweak tr { display: none; }" in html
+    assert "console.log('mi-tweak-local');" in html
+    head = html.split("</head>", 1)[0]
+    assert "custom/dashboard.css (local)" in head          # CSS dentro del head
+    body = html.split("</head>", 1)[1]
+    assert "custom/dashboard.js (local)" in body           # JS en el body
+    assert html.index("mi-tweak-local") > html.index("copyUuid")  # tras el JS nativo
+
+
+def test_enlace_de_fork_sobrevive_al_mover_el_chat(mgr, tmp_path):
+    """Al archivar un chat se reescriben sus enlaces al panel; el del banner de
+    fork lleva `#open=` y antes se quedaba sin corregir (enlace roto)."""
+    html = tmp_path / "Chat 2026-01-01 09-00 a1b2c3d4.html"
+    html.write_text('<a href="../CCV-Dashboard.html">D</a>'
+                    '<a class="fork-link" href="../CCV-Dashboard.html#open=abc">o</a>',
+                    encoding="utf-8")
+    mgr.fix_dashboard_link(html, "CCV-Dashboard.html")
+    t = html.read_text(encoding="utf-8")
+    assert 'href="../../CCV-Dashboard.html"' in t
+    assert 'href="../../CCV-Dashboard.html#open=abc"' in t
+    assert 'href="../CCV-Dashboard.html' not in t
+
+
+def test_panel_redirige_open_al_chat_y_avisa_si_no_existe(mgr, dashboard_sandbox, tmp_path):
+    """El panel atiende `#open=<sesión>` (el enlace del banner de fork): ejecuta
+    con Node el código real del panel sobre sus filas reales y comprueba a dónde
+    redirige. Casa por sesión completa (sin distinguir mayúsculas) y por prefijo
+    (filas cuyo JSONL ya no existe y solo conservan el hash corto); sin chat,
+    no redirige, limpia el hash y deja el aviso para la carga. Además, todo el
+    JavaScript del panel es sintácticamente válido. Se omite sin Node."""
+    import html as htmlmod, re, shutil, subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node no disponible")
+    config, output_dir, _ = dashboard_sandbox
+    mgr.generate_index(config)
+    page = (output_dir / "CCV-Dashboard.html").read_text(encoding="utf-8")
+
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    check = tmp_path / "dash.js"
+    check.write_text("\n;\n".join(scripts), encoding="utf-8")
+    r = subprocess.run([node, "--check", str(check)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:800]
+
+    start = page.index("(function()", page.index('Deep link "#open='))
+    iife = page[start:page.index("})();", start) + len("})();")]
+    rows = [{"uuid": htmlmod.unescape(u), "html": htmlmod.unescape(h)} for u, h in
+            re.findall(r'<tr[^>]*\sdata-uuid="([^"]*)"[^>]*\sdata-html="([^"]*)"', page)]
+    assert len(rows) == 1 and rows[0]["uuid"] == "a1b2c3d4-0000-0000-0000-000000000000"
+    real = rows[0]["html"]
+    corto = [{"uuid": "", "html": "vacio.html"}, {"uuid": "b9e8f7a6", "html": "Archived/b.html"}]
+    sin_html = [{"uuid": "c0000000-0000-0000-0000-000000000000", "html": ""}]
+
+    harness = (
+        "function run(hash, rows) {\n"
+        "  var out = {replaced: null, cleared: false, onload: false};\n"
+        "  var location = {hash: hash, pathname: '/d.html', search: '',\n"
+        "                  replace: function(u) { out.replaced = u; }};\n"
+        "  var document = {querySelectorAll: function() {\n"
+        "      return rows.map(function(r) { return {dataset: r}; }); }};\n"
+        "  var history = {replaceState: function() { out.cleared = true; }};\n"
+        "  var window = {addEventListener: function(ev) { if (ev === 'load') out.onload = true; }};\n"
+        f"  {iife}\n"
+        "  return out;\n"
+        "}\n"
+        "console.log(JSON.stringify([\n"
+        f"  run('#open=a1b2c3d4-0000-0000-0000-000000000000', {json.dumps(rows)}),\n"
+        f"  run('#open=A1B2C3D4-0000-0000-0000-000000000000', {json.dumps(rows)}),\n"
+        f"  run('#open=b9e8f7a6-1111-2222-3333-444444444444', {json.dumps(corto)}),\n"
+        f"  run('#open=c0000000-0000-0000-0000-000000000000', {json.dumps(sin_html)}),\n"
+        f"  run('#open=ffffffff-0000-0000-0000-000000000000', {json.dumps(rows)}),\n"
+        f"  run('#sort=name', {json.dumps(rows)})\n"
+        "]));\n")
+    f = tmp_path / "harness.js"
+    f.write_text(harness, encoding="utf-8")
+    r = subprocess.run([node, str(f)], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr[:800]
+    exacto, mayus, prefijo, sin_pagina, ausente, otro_hash = json.loads(r.stdout)
+
+    for caso in (exacto, mayus):
+        assert caso == {"replaced": real, "cleared": False, "onload": False}
+    assert prefijo["replaced"] == "Archived/b.html"
+    for caso in (sin_pagina, ausente):
+        assert caso == {"replaced": None, "cleared": True, "onload": True}
+    assert otro_hash == {"replaced": None, "cleared": False, "onload": False}
+
+
+def test_categoria_desactivada_con_chats_sigue_visible(mgr, dashboard_sandbox):
+    """Regresión: desactivar Shorts o Archive después de usarlos dejaba los
+    chats ya movidos invisibles para siempre (el filtro de su categoría dejaba
+    de existir). La categoría conserva su filtro mientras tenga chats, y la
+    ayuda de categorías explica qué son aunque la función esté apagada."""
+    config, output_dir, _ = dashboard_sandbox
+    shorts = output_dir / "Chats" / "Shorts"
+    shorts.mkdir()
+    (output_dir / "Chats" / "Chat 2026-06-13 09-00 a1b2c3d4.html").rename(
+        shorts / "Chat 2026-06-13 09-00 a1b2c3d4.html")
+    assert config["shorts"]["enabled"] is False
+    mgr.generate_index(config)
+    html = (output_dir / "CCV-Dashboard.html").read_text(encoding="utf-8")
+    assert 'id="filterShort"' in html
+    assert "(category === 'Short' && showShort)" in html
+    assert "<strong>Short:</strong> Small chats moved to Shorts/ while Shorts was enabled" in html
+    assert 'id="filterArchived"' not in html       # sin chats archivados, sin filtro
+    assert "<strong>Archived:</strong>" not in html
+
+
+def test_panel_estado_y_controles_robustos(mgr, dashboard_sandbox, ejecuta_red_de_carga,
+                                           ejecuta_js, dobles_de_copiar):
+    """La pantalla de carga del panel no puede quedarse fija si el JavaScript
+    falla (se ejecuta su red con Node); el botón de copiar el identificador,
+    ejecutado con Node, no se atasca con un doble clic y avisa si falla; el
+    modo Select se restaura AL FINAL (antes guardaba el estado con el orden y el
+    interruptor Agents aún por defecto, y se perdían en la segunda recarga); y
+    las columnas de texto ordenan de la A a la Z en el primer clic. Límite: estos
+    dos últimos se fijan en el código (no hay pruebas en navegador)."""
+    config, output_dir, _ = dashboard_sandbox
+    mgr.generate_index(config)
+    html = (output_dir / "CCV-Dashboard.html").read_text(encoding="utf-8")
+    assert ejecuta_red_de_carga(html, "dashLoading") == [True, True]
+    assert ".dash-loading {{ display: none".replace("{{", "{") in html   # <noscript>
+    copia = html[html.index("function copyUuid"):]
+    copia = copia[:copia.index("</script>")]
+    r = ejecuta_js(dobles_de_copiar + copia + """
+var b = boton('ICONO'); copyUuid(b); avanza(400); copyUuid(b); avanza(1100);
+var doble = estado(b);
+copiaOk = false; var f = boton('ICONO'); copyUuid(f); var fallo = estado(f);
+avanza(1100);
+console.log(JSON.stringify([doble, fallo, estado(f)]));
+""")
+    assert r == ["ICONO|", "✗|", "ICONO|"]
+    restaura = html[html.index("if (saved.delMode)"):]
+    assert restaura.index("sortTable(saved.sort.col") < restaura.index("selectBtn.click()")
+    assert "TEXT_SORT_COLS.includes(col) ? 'asc' : 'desc'" in html

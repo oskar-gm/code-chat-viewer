@@ -6,8 +6,8 @@ Scans Claude Code projects, generates/updates HTML visualizations,
 organizes chats by activity, and creates an interactive dashboard.
 
 Reads configuration from config.json (see config.example.json for template).
-If config.json is not found, the script exits with setup instructions.
-Use with Claude Code for interactive configuration setup.
+If config.json is not found, an interactive setup creates it; when not run from
+a terminal, the script exits with setup instructions instead.
 
 Copyright (c) 2025-2026 Óscar González Martín
 Licensed under the MIT License - see LICENSE for details
@@ -78,10 +78,12 @@ def _prompt_int(label: str, default: int) -> int:
         return default
 
 
-def interactive_setup(existing: dict = None) -> Path:
+def interactive_setup(existing: dict = None, config_path: Path = None) -> Path:
     """Guide the user through creating (or updating) config.json step by step.
 
-    If `existing` is given, its values are shown as defaults (reconfigure mode).
+    If `existing` is given, its values are shown as defaults (reconfigure mode)
+    and everything the setup does not ask about (such as `last_run_version`) is
+    kept. `config_path` is the file to rewrite; by default, the project root.
     """
     home = Path.home()
     e = existing or {}
@@ -114,8 +116,12 @@ def interactive_setup(existing: dict = None) -> Path:
     print("  Claude Code creates sub-chats for background tasks.")
     include_agents = _prompt_yn("Include agent chats?", ag.get("include", True))
     min_agent_kb = ag.get("min_size_kb", 3)
+    include_compaction = ag.get("include_compaction", False)
     if include_agents:
         min_agent_kb = _prompt_int("Min agent size in KB (skip tiny ones)", min_agent_kb)
+        include_compaction = _prompt_yn(
+            "Include compaction agents? (internal /compact summarizer sub-chats)",
+            include_compaction)
     print()
 
     # --- Organization ---
@@ -143,7 +149,7 @@ def interactive_setup(existing: dict = None) -> Path:
         "agents": {
             "include": include_agents,
             "min_size_kb": min_agent_kb,
-            "include_compaction": ag.get("include_compaction", False),
+            "include_compaction": include_compaction,
         },
         "inactive_days": inactive_days,
         "shorts": {
@@ -153,14 +159,34 @@ def interactive_setup(existing: dict = None) -> Path:
         },
         "archive": {"enabled": archive_enabled, "folder": ar.get("folder", "Archived")},
     }
+    # Keep what the setup does not ask about (e.g. last_run_version): rewriting
+    # without it would bring back the "run Force" notice after every reconfigure.
+    for key, value in e.items():
+        if key not in config and not key.startswith("_"):
+            config[key] = value
 
-    config_path = PROJECT_ROOT / "config.json"
+    config_path = config_path or PROJECT_ROOT / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
 
     print(f"  Config saved: {config_path}")
     print()
     return config_path
+
+
+def _safe_subfolder(value, default: str) -> str:
+    """Name of a Chats/ subfolder (shorts, archive), or `default` if unusable.
+
+    An empty name, '.', '..', a path or a name with separators makes the target
+    folder resolve to Chats/ itself (or outside it). Moving a file onto itself
+    then takes the "duplicate" branch and DELETES it — so such values are never
+    accepted, whatever config.json says.
+    """
+    name = str(value).strip() if value is not None else ""
+    if (not name or name in (".", "..") or "/" in name or "\\" in name
+            or ":" in name):
+        return default
+    return name
 
 
 def load_config() -> dict:
@@ -186,6 +212,13 @@ def load_config() -> dict:
     # Time display format for timestamps: "12h" (AM/PM, default) or "24h".
     tf = str(config.get("time_format", "12h")).lower()
     config["time_format"] = tf if tf in ("12h", "24h") else "12h"
+
+    # Subfolder names must be plain names (see _safe_subfolder): an empty one
+    # would make archiving delete the HTMLs it was meant to move.
+    for section, default in (("shorts", "Shorts"), ("archive", "Archived")):
+        if isinstance(config.get(section), dict):
+            config[section]["folder"] = _safe_subfolder(
+                config[section].get("folder"), default)
 
     # Resolve paths
     source_path = Path(config["source"]["projects_path"]).expanduser().resolve()
@@ -233,11 +266,46 @@ from visualizer import (  # noqa: E402
     KNOWN_METADATA_TYPES,
     KNOWN_CONTENT_TYPES,
     is_caveat_message,
+    is_compact_summary_entry,
     is_stdout_message,
     is_task_notification,
     parse_command_tags,
     is_image_source_message,
 )
+
+# ---------------------------------------------------------------------------
+# Local customization (optional)
+# ---------------------------------------------------------------------------
+
+# Repo-local `custom/` folder (gitignored): if dashboard.css / dashboard.js
+# exist there, their contents are embedded into the generated dashboard. This
+# is a generic extension point — personal tweaks (extra buttons, filters,
+# themes) live in local files that never touch the public codebase.
+CUSTOM_DIR = Path(__file__).resolve().parent.parent / "custom"
+
+
+def load_custom_assets() -> tuple[str, str]:
+    """Return (css_block, js_block) with the local custom assets wrapped in
+    their tags, or empty strings when absent. Contents are embedded verbatim:
+    they are the user's own local files by design (the folder is gitignored,
+    so nothing personal can end up in the public repo)."""
+    css_block = js_block = ""
+    css = CUSTOM_DIR / "dashboard.css"
+    js = CUSTOM_DIR / "dashboard.js"
+    try:
+        if css.is_file():
+            css_block = ("\n    <style>/* custom/dashboard.css (local) */\n"
+                         + css.read_text(encoding="utf-8") + "\n    </style>")
+    except OSError:
+        pass
+    try:
+        if js.is_file():
+            js_block = ("\n    <script>/* custom/dashboard.js (local) */\n"
+                        + js.read_text(encoding="utf-8") + "\n    </script>")
+    except OSError:
+        pass
+    return css_block, js_block
+
 
 # ---------------------------------------------------------------------------
 # Hash & file utilities
@@ -278,7 +346,7 @@ def is_fork_context_ref(jsonl_path: Path) -> bool:
     """A file under subagents/ whose first record is a fork context reference
     (`type: fork-context-ref`), not a real agent chat with navigable messages."""
     try:
-        with open(jsonl_path, encoding="utf-8") as fh:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
             first = fh.readline()
         return json.loads(first).get("type") == "fork-context-ref"
     except (OSError, ValueError):
@@ -288,7 +356,7 @@ def is_fork_context_ref(jsonl_path: Path) -> bool:
 def agent_first_record(jsonl_path: Path) -> dict:
     """First JSONL record of an agent chat (carries agentId, slug, sessionId…)."""
     try:
-        with open(jsonl_path, encoding="utf-8") as fh:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
             return json.loads(fh.readline())
     except (OSError, ValueError):
         return {}
@@ -302,7 +370,7 @@ def build_agent_invocations(parent_jsonl: Path) -> dict:
     tu = {}    # tool_use_id -> (subagent_type, description)
     res = {}   # agentId -> tool_use_id
     try:
-        with open(parent_jsonl, encoding="utf-8") as fh:
+        with open(parent_jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if '"Agent"' not in line and '"toolUseResult"' not in line:
                     continue
@@ -481,34 +549,40 @@ def find_jsonl_for_html(projects_path: Path, html_name: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
-def find_current_jsonl(source_path: Path) -> Path | None:
+def find_current_jsonl(source_path: Path, cwd=None) -> Path | None:
     """Auto-detect the current session JSONL from CWD.
 
-    Encodes the current working directory to the Claude Code project
-    directory format, then returns the most recently modified non-agent
-    JSONL in that project directory.
+    Encodes the working directory and each of its ancestors the way Claude Code
+    names its project folders (every character that is not a letter or digit
+    becomes '-'), picks the project of the working directory — or, from a
+    subfolder, of its closest ancestor — and returns its most recently modified
+    non-agent JSONL. Only real ancestors count: a sibling or deeper project whose
+    encoded name merely starts the same way (`proj_backup` next to `proj`) is
+    never taken for the current one.
     """
-    cwd = Path.cwd()
-    encoded = str(cwd).replace(":", "-").replace("\\", "-").replace("/", "-")
-
+    here = Path(cwd or Path.cwd())
+    depth_of = {}
+    for depth, folder in enumerate([here, *here.parents]):
+        depth_of.setdefault(re.sub(r"[^A-Za-z0-9]", "-", str(folder)).lower(), depth)
+    best, best_depth = None, None
     for project_dir in source_path.iterdir():
         if not project_dir.is_dir():
             continue
-        if encoded in project_dir.name:
-            jsonls = sorted(
-                [f for f in project_dir.glob("*.jsonl")
-                 if not f.name.startswith("agent-")],
-                key=lambda x: x.stat().st_mtime,
-                reverse=True,
-            )
-            return jsonls[0] if jsonls else None
-    return None
+        depth = depth_of.get(project_dir.name.lower())
+        if depth is not None and (best_depth is None or depth < best_depth):
+            best, best_depth = project_dir, depth
+    if best is None:
+        return None
+    jsonls = sorted(
+        [f for f in best.glob("*.jsonl") if not f.name.startswith("agent-")],
+        key=lambda x: x.stat().st_mtime,
+        reverse=True,
+    )
+    return jsonls[0] if jsonls else None
 
 
-def find_chat_by_name(
-    search_terms: str, source_path: Path, output_path: Path
-) -> Path | None:
-    """Find the HTML for a chat matching the search terms.
+def find_jsonl_by_name(search_terms: str, source_path: Path) -> Path | None:
+    """Find the JSONL of the chat matching the search terms (most recent), or None.
 
     Matching is flexible: all search words must appear somewhere in the
     chat's title/summary/prompt (case-insensitive, any order). Searches
@@ -568,10 +642,49 @@ def find_chat_by_name(
 
     # Most recent match
     candidates.sort(key=lambda x: x[0], reverse=True)
-    best_jsonl = candidates[0][1]
+    return candidates[0][1]
 
+
+def find_chat_by_name(
+    search_terms: str, source_path: Path, output_path: Path
+) -> Path | None:
+    """Find the existing HTML for a chat matching the search terms, or None."""
+    best_jsonl = find_jsonl_by_name(search_terms, source_path)
+    if not best_jsonl:
+        return None
     hash_prefix = get_hash_from_filename(best_jsonl.name)
     return find_existing_html(output_path, hash_prefix)
+
+
+def find_jsonl_by_ident(ident: str, source_path: Path) -> Path | None:
+    """Resolve a chat identifier to its JSONL, or None.
+
+    Accepts a full UUID, a hash prefix (>= 8 hex chars) matched against the
+    JSONL filename, or free text matched against the chat title/summary/first
+    prompt (most recent wins). Used by the --only single-chat regeneration.
+    """
+    ident = (ident or "").strip()
+    if not ident:
+        return None
+
+    # Full UUID or hex hash prefix (>= 8 chars) → match by JSONL filename.
+    hash_prefix = None
+    if re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                ident, re.I):
+        hash_prefix = ident[:8].lower()
+    elif re.match(r"^[0-9a-f]{8,}$", ident, re.I):
+        hash_prefix = ident[:8].lower()
+
+    if hash_prefix:
+        for project_dir in source_path.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for jsonl in project_dir.glob(f"{hash_prefix}*.jsonl"):
+                return jsonl
+        return None
+
+    # Free text → resolve by title.
+    return find_jsonl_by_name(ident, source_path)
 
 
 def open_in_browser(path: Path):
@@ -598,15 +711,17 @@ def _open_path(path):
 
 
 def fix_dashboard_link(html_path: Path, index_filename: str):
-    """Update dashboard link when an HTML file is moved deeper into a subfolder.
+    """Update dashboard links when an HTML file is moved deeper into a subfolder.
 
     Files in Chats/ have href="../dashboard". When moved to Chats/Shorts/ or
-    Chats/Archived/, the link needs to become href="../../dashboard".
+    Chats/Archived/, the link needs to become href="../../dashboard". Matched as
+    a prefix so links that carry a fragment (the fork banner's
+    "../dashboard#open=<session>") are fixed too.
     """
     try:
         content = html_path.read_text(encoding="utf-8")
-        old_href = f'href="../{index_filename}"'
-        new_href = f'href="../../{index_filename}"'
+        old_href = f'href="../{index_filename}'
+        new_href = f'href="../../{index_filename}'
         if old_href in content:
             content = content.replace(old_href, new_href)
             html_path.write_text(content, encoding="utf-8")
@@ -626,7 +741,7 @@ def manage_shorts(config: dict) -> dict:
 
     chats_path = config["_resolved"]["chats_path"]
     source_path = config["_resolved"]["source_path"]
-    folder_name = config["shorts"].get("folder", "Shorts")
+    folder_name = _safe_subfolder(config["shorts"].get("folder"), "Shorts")
     max_size = config["shorts"].get("max_size_kb", 40) * 1024
     inactive_days = config.get("inactive_days", 5)
     index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
@@ -682,7 +797,7 @@ def manage_archived(config: dict) -> dict:
 
     chats_path = config["_resolved"]["chats_path"]
     source_path = config["_resolved"]["source_path"]
-    folder_name = config["archive"].get("folder", "Archived")
+    folder_name = _safe_subfolder(config["archive"].get("folder"), "Archived")
     inactive_days = config.get("inactive_days", 5)
     index_filename = config["output"].get("index_filename", "CCV-Dashboard.html")
 
@@ -812,10 +927,12 @@ def parse_html_filename(filename: str) -> dict:
     if match:
         date_str = match.group(1)
         time_str = match.group(2).replace("-", ":")
-        hash_part = match.group(3).split(".")[0]
         try:
             dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-            return {"date": dt, "hash": hash_part[:8]}
+            # Delegate the hash to get_hash_from_filename: truncating to 8 chars
+            # here left agents with just 'Agent-XX' (two hex of entropy), so the
+            # dedup key collided and the dashboard hid all but a handful of them.
+            return {"date": dt, "hash": get_hash_from_filename(filename)}
         except ValueError:
             pass
     return {"date": None, "hash": get_hash_from_filename(filename)}
@@ -824,7 +941,7 @@ def parse_html_filename(filename: str) -> dict:
 def is_snapshot_only(jsonl_path: Path) -> bool:
     """Check if a JSONL file contains only file-history-snapshot entries."""
     try:
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     obj = json.loads(line.strip())
@@ -833,8 +950,13 @@ def is_snapshot_only(jsonl_path: Path) -> bool:
                 if obj.get("type") in ("user", "assistant"):
                     return False
         return True
-    except OSError:
-        return True
+    except (OSError, UnicodeDecodeError):
+        # Can't read the file (transient lock on a live JSONL, AV scan, a stray
+        # non-UTF8 byte…): be conservative and treat it as a real chat, so we
+        # never delete a good HTML for a file we merely failed to read this run.
+        # UnicodeDecodeError subclasses ValueError, not OSError — it needs to be
+        # named explicitly or it escapes and aborts the whole run.
+        return False
 
 
 def extract_jsonl_metadata(jsonl_path: Path) -> dict:
@@ -856,7 +978,7 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
     }
 
     try:
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     obj = json.loads(line.strip())
@@ -877,7 +999,7 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
 
                 # Recap: keep the LAST obtainable summary while scanning.
                 # Sources: type=summary (auto-compaction), system away
-                # summaries, and user messages flagged isCompactSummary.
+                # summaries, and compact continuation entries (flag or phrase).
                 if obj.get("type") == "summary":
                     s = obj.get("summary", "")
                     if isinstance(s, str) and s.strip():
@@ -893,7 +1015,7 @@ def extract_jsonl_metadata(jsonl_path: Path) -> dict:
                 if obj.get("type") != "user":
                     continue
 
-                if obj.get("isCompactSummary"):
+                if is_compact_summary_entry(obj):
                     msg_c = obj.get("message", {})
                     c = msg_c.get("content", "") if isinstance(msg_c, dict) else ""
                     txt = ""
@@ -1229,6 +1351,7 @@ def generate_index(config: dict) -> int:
     shorts_max_kb = config.get("shorts", {}).get("max_size_kb", 40)
 
     chats_data = collect_chats_data(config)
+    custom_css, custom_js = load_custom_assets()
 
     total_chats = len(chats_data)
     active_count = sum(1 for c in chats_data if c["category"] == "Active")
@@ -1334,40 +1457,50 @@ def generate_index(config: dict) -> int:
 
     # Build category stats line
     agent_count = sum(1 for c in chats_data if c.get("is_agent"))
+    # A category gets its count and filter whenever it holds chats — also after
+    # its feature was disabled: chats already moved there would otherwise be
+    # hidden for good, with no control to show them.
+    short_filter = shorts_enabled or short_count > 0
+    archive_filter = archive_enabled or archived_count > 0
+
     stats_parts = [f"Total: {total_chats} chats", f"Active: {active_count}"]
     if agent_count:
         stats_parts.append(f"Agents: {agent_count}")
-    if shorts_enabled:
+    if short_filter:
         stats_parts.append(f"Shorts: {short_count}")
-    if archive_enabled:
+    if archive_filter:
         stats_parts.append(f"Archived: {archived_count}")
     stats_line = " | ".join(stats_parts)
 
     # Build category filter checkboxes
     filter_checkboxes = '<label><input type="checkbox" id="filterActive" checked> Active</label>'
-    if shorts_enabled:
+    if short_filter:
         filter_checkboxes += '\n            <label><input type="checkbox" id="filterShort"> Shorts</label>'
-    if archive_enabled:
+    if archive_filter:
         filter_checkboxes += '\n            <label><input type="checkbox" id="filterArchived"> Archived</label>'
 
     # Build category tooltip
     tooltip_lines = f'<strong>Active:</strong> Chats used within the last {inactive_days} days. Kept in the root folder for quick access.'
     if shorts_enabled:
         tooltip_lines += f'<br><br><strong>Short:</strong> Small chats (&lt;{shorts_max_kb}KB) inactive for {inactive_days}+ days. Moved to {shorts_folder}/ to keep root clean.'
+    elif short_filter:
+        tooltip_lines += f'<br><br><strong>Short:</strong> Small chats moved to {shorts_folder}/ while Shorts was enabled (now off: no new chats move there).'
     if archive_enabled:
         tooltip_lines += f'<br><br><strong>Archived:</strong> Chats inactive for {inactive_days}+ days. Moved to {archive_folder}/ automatically.'
+    elif archive_filter:
+        tooltip_lines += f'<br><br><strong>Archived:</strong> Chats moved to {archive_folder}/ while Archive was enabled (now off: no new chats move there).'
 
     # Build filter JS
     filter_js_vars = "const showActive = document.getElementById('filterActive').checked;"
     filter_js_listeners = "document.getElementById('filterActive').addEventListener('change', () => { filterTable(); saveState(); });"
     filter_js_conditions = "(category === 'Active' && showActive)"
 
-    if shorts_enabled:
+    if short_filter:
         filter_js_vars += "\n            const showShort = document.getElementById('filterShort').checked;"
         filter_js_listeners += "\n        document.getElementById('filterShort').addEventListener('change', () => { filterTable(); saveState(); });"
         filter_js_conditions += " ||\n                    (category === 'Short' && showShort)"
 
-    if archive_enabled:
+    if archive_filter:
         filter_js_vars += "\n            const showArchived = document.getElementById('filterArchived').checked;"
         filter_js_listeners += "\n        document.getElementById('filterArchived').addEventListener('change', () => { filterTable(); saveState(); });"
         filter_js_conditions += " ||\n                    (category === 'Archived' && showArchived)"
@@ -1396,6 +1529,14 @@ def generate_index(config: dict) -> int:
             font-size: 13px;
             display: flex;
             flex-direction: column;
+        }}
+
+        /* Notice when a "#open=<session>" link points at a chat with no page. */
+        .open-missing {{
+            position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; max-width: 90vw; padding: 8px 14px; border-radius: 6px;
+            background: #FEF3C7; color: #92400E; border: 1px solid #F59E0B;
+            font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15);
         }}
 
         /* Loading overlay: hides the brief jump while the saved state (filters,
@@ -2006,10 +2147,20 @@ def generate_index(config: dict) -> int:
         .footer a {{ color: #666; text-decoration: none; }}
         .footer a:hover {{ text-decoration: underline; }}
         .hidden-row {{ display: none; }}
-    </style>
+    </style>{custom_css}
 </head>
 <body>
     <div id="dashLoading" class="dash-loading"><div class="dash-loading-spin"></div><div class="dash-loading-msg">Loading your chats… hang tight!</div></div>
+    <noscript><style>.dash-loading {{ display: none !important; }}</style></noscript>
+    <script>
+        /* Fail-safe, independent of the main script: if that script breaks, the
+           loading overlay must not stay up and hide the whole dashboard. */
+        (function() {{
+            function drop() {{ var l = document.getElementById('dashLoading'); if (l) l.remove(); }}
+            window.addEventListener('error', drop);
+            window.addEventListener('load', function() {{ setTimeout(drop, 2000); }});
+        }})();
+    </script>
     <div class="header">
         <div class="header-title">
             <img src="data:image/png;base64,{ICON_BASE64}" alt="" style="height:16px;width:16px;vertical-align:middle;margin-right:6px;" onerror="this.style.display='none'">
@@ -2034,12 +2185,12 @@ def generate_index(config: dict) -> int:
 
     <div class="toolbar">
         <div class="tb-block">
-            <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
-            <button id="deleteBtn" class="tb-btn danger" disabled>Delete</button>
-        </div>
-        <div class="tb-block">
             <button type="button" id="searchToggle" class="tb-btn" aria-pressed="false">Search</button>
             <button type="button" id="clearBtn" class="tb-btn" title="Reset all options: filters, columns, selection, search">Clear</button>
+        </div>
+        <div class="tb-block">
+            <button id="selectModeBtn" class="tb-btn" title="Select chats to delete">Select</button>
+            <button id="deleteBtn" class="tb-btn danger" disabled>Delete</button>
         </div>
         <i class="tb-break tb-break-1"></i>
         <div class="tb-block filter-group">
@@ -2087,7 +2238,7 @@ def generate_index(config: dict) -> int:
             </div>
             <textarea class="modal-cmd" id="delCmd" readonly spellcheck="false"></textarea>
             <div class="modal-actions">
-                <span class="modal-hint">Run the command in your terminal, then regenerate (Update Chats) to refresh the dashboard.</span>
+                <span class="modal-hint">Run the command in your terminal, then run the manager again to refresh the dashboard.</span>
                 <button class="tb-btn" id="delCopy">Copy command</button>
                 <button class="tb-btn" id="delClose">Close</button>
             </div>
@@ -2123,6 +2274,35 @@ def generate_index(config: dict) -> int:
     </div>
 
     <script>
+        /* Deep link "#open=<session>": chats link to one another through the
+           dashboard, which always knows where each chat currently lives (they
+           move between Chats/, Shorts/ and Archived/ after being generated).
+           Redirect to that chat; if it has no HTML, say so instead of failing
+           silently. Runs first, before any state is restored. */
+        (function() {{
+            var m = /^#open=([0-9a-fA-F-]+)$/.exec(location.hash);
+            if (!m) return;
+            var id = m[1].toLowerCase();
+            var rows = document.querySelectorAll('tr[data-uuid]');
+            for (var i = 0; i < rows.length; i++) {{
+                var u = (rows[i].dataset.uuid || '').toLowerCase();
+                if (u && rows[i].dataset.html && (u === id || id.indexOf(u) === 0)) {{
+                    location.replace(rows[i].dataset.html);
+                    return;
+                }}
+            }}
+            history.replaceState(null, '', location.pathname + location.search);
+            window.addEventListener('load', function() {{
+                var n = document.createElement('div');
+                n.className = 'open-missing';
+                n.textContent = 'No page for that chat (' + id.slice(0, 8) + ') in this dashboard '
+                    + '— it may not be generated yet, or Claude Code may have cleaned up its history.';
+                n.addEventListener('click', function() {{ n.remove(); }});
+                document.body.appendChild(n);
+                setTimeout(function() {{ n.remove(); }}, 8000);
+            }});
+        }})();
+
         /* State persistence (localStorage, 5h TTL) */
         const STATE_KEY = 'ccv-dashboard-state';
         const STATE_TTL = 5 * 60 * 60 * 1000;
@@ -2176,12 +2356,17 @@ def generate_index(config: dict) -> int:
 
         /* Table sorting */
         let currentSort = {{ col: 'modified', dir: 'desc' }};
+        const TEXT_SORT_COLS = ['name', 'project', 'category', 'uuid', 'branch'];
 
         document.querySelectorAll('th[data-sort]').forEach(th => {{
             if (th.dataset.sort === 'none') return;
             th.addEventListener('click', () => {{
                 const col = th.dataset.sort;
-                const dir = (currentSort.col === col && currentSort.dir === 'desc') ? 'asc' : 'desc';
+                // Same column: flip. New column: text reads A→Z first, numbers
+                // and dates biggest / newest first.
+                const dir = currentSort.col === col
+                    ? (currentSort.dir === 'desc' ? 'asc' : 'desc')
+                    : (TEXT_SORT_COLS.includes(col) ? 'asc' : 'desc');
                 document.querySelectorAll('th').forEach(h => h.classList.remove('sorted-asc', 'sorted-desc'));
                 th.classList.add(dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
                 currentSort = {{ col, dir }};
@@ -2621,10 +2806,6 @@ def generate_index(config: dict) -> int:
             }});
             if (saved.delTab) delTab = saved.delTab;
             if (saved.delMode) document.getElementById('delPermanent').checked = true;
-            // Restore the Select mode (column visible); the individual delete
-            // marks are intentionally NOT persisted (transient, avoids accidental
-            // deletes after a refresh).
-            if (saved.selectMode) selectBtn.click();
             if (saved.showAgents && agentsBtn) {{
                 showAgents = true;
                 agentsBtn.checked = true;
@@ -2636,6 +2817,12 @@ def generate_index(config: dict) -> int:
                 if (th) th.classList.add(saved.sort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
                 sortTable(saved.sort.col, saved.sort.dir);
             }}
+            // Restore the Select mode (column visible) LAST: its click handler
+            // saves the state, and run earlier it would overwrite the saved sort
+            // and Agents toggle with the defaults. The individual delete marks are
+            // intentionally NOT persisted (transient, avoids accidental deletes
+            // after a refresh).
+            if (saved.selectMode) selectBtn.click();
         }}
 
         document.querySelectorAll('.del-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === delTab));
@@ -2651,12 +2838,18 @@ def generate_index(config: dict) -> int:
         /* Copy UUID to clipboard */
         function copyUuid(btn) {{
             const uuid = btn.closest('.uuid-col').querySelector('.uuid-text').textContent;
-            navigator.clipboard.writeText(uuid);
-            const orig = btn.innerHTML;
-            btn.textContent = 'OK';
-            setTimeout(function() {{ btn.innerHTML = orig; }}, 1000);
+            // The original icon is kept once, so a second click while the
+            // feedback shows cannot freeze the button on it.
+            if (btn.dataset.icon === undefined) btn.dataset.icon = btn.innerHTML;
+            const show = function(label) {{
+                clearTimeout(btn._copyTimer);
+                btn.textContent = label;
+                btn._copyTimer = setTimeout(function() {{ btn.innerHTML = btn.dataset.icon; }}, 1000);
+            }};
+            navigator.clipboard.writeText(uuid).then(function() {{ show('OK'); }},
+                                                     function() {{ show('✗'); }});
         }}
-    </script>
+    </script>{custom_js}
 </body>
 </html>'''
 
@@ -2683,7 +2876,7 @@ def _collect_btw_history(history_path: Path) -> list[dict]:
     entries = []
     if not history_path.exists():
         return entries
-    with open(history_path, "r", encoding="utf-8") as f:
+    with open(history_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 e = json.loads(line)
@@ -2866,7 +3059,7 @@ def generate_btw_view(config: dict) -> Path | None:
     gen_time = _fmt_dt(datetime.now(), config["time_format"])
 
     html = f"""<!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -3217,7 +3410,7 @@ def audit_chats(config: dict, scan_count="50") -> dict:
         findings["scanned"] += 1
         chat_name = jsonl_file.name
         try:
-            with open(jsonl_file, "r", encoding="utf-8") as f:
+            with open(jsonl_file, "r", encoding="utf-8", errors="replace") as f:
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     if not line:
@@ -3563,9 +3756,22 @@ def generate_audit_view(config: dict, scan_count="50"):
 
 
 def _version_tuple(v):
+    """Numeric (major, minor, patch) of a version string.
+
+    Tolerates the suffixes a real release tag can carry ('2.7.0-rc1',
+    '2.7.0+build'): each segment contributes its leading digits. Returns None
+    when no number can be read at all — callers must guard against that before
+    comparing, since None < tuple raises TypeError.
+    """
     try:
-        return tuple(int(x) for x in str(v).split(".")[:3])
-    except (ValueError, AttributeError):
+        parts = []
+        for seg in str(v).split(".")[:3]:
+            m = re.match(r"\d+", seg.strip())
+            if not m:
+                break
+            parts.append(int(m.group()))
+        return tuple(parts) if parts else None
+    except (ValueError, AttributeError, TypeError):
         return None
 
 
@@ -3582,7 +3788,8 @@ def _needs_force_recommendation(last, current):
 
 
 def _get_last_run_version():
-    """Version that last ran a Force, read straight from config.json (or None)."""
+    """Version the chats were last fully rendered with (recorded after a Force,
+    or at a fresh install), read straight from config.json (or None)."""
     try:
         p = find_config()
         if p and p.exists():
@@ -3593,8 +3800,21 @@ def _get_last_run_version():
     return None
 
 
+def _version_notice_needed(chats_path: Path) -> tuple:
+    """Whether to recommend a Force rebuild at launch, and the version last
+    recorded. A fresh install (no chat generated yet) has nothing rendered by an
+    older version: its version is recorded instead, so a new user is never told
+    to rebuild what was never built."""
+    last_run = _get_last_run_version()
+    if last_run is None and not (chats_path.exists() and any(chats_path.rglob("*.html"))):
+        _save_last_run_version(APP_VERSION)
+        return False, None
+    return _needs_force_recommendation(last_run, APP_VERSION), last_run
+
+
 def _save_last_run_version(version):
-    """Record the version that last ran a Force into config.json (best-effort)."""
+    """Record in config.json the version the chats are rendered with: after a
+    Force, or at a fresh install (best-effort)."""
     try:
         p = find_config()
         if not p or not p.exists():
@@ -3646,7 +3866,8 @@ def reconfigure(config: dict):
             return
         print()
         existing = {k: v for k, v in config.items() if not k.startswith("_")}
-        interactive_setup(existing=existing)
+        # Rewrite the file in use, wherever it was found (not always the root).
+        interactive_setup(existing=existing, config_path=config["_resolved"]["config_path"])
         print("  Settings updated. Re-run CCV to apply them.")
     elif sub == "2":
         cfg_path = config["_resolved"]["config_path"]
@@ -3701,7 +3922,8 @@ def check_for_updates():
     html_url = data.get("html_url", releases_url)
     published = str(data.get("published_at", ""))
 
-    if not tag or _version_tuple(tag) <= _version_tuple(APP_VERSION):
+    latest, current = _version_tuple(tag), _version_tuple(APP_VERSION)
+    if not tag or not latest or not current or latest <= current:
         print(f"  You're on the latest version (v{APP_VERSION}).")
         print()
         return
@@ -3764,6 +3986,12 @@ def main():
                 and not sys.argv[idx + 1].startswith("--")):
             current_jsonl_path = Path(sys.argv[idx + 1])
 
+    only_ident = None
+    if "--only" in sys.argv:
+        idx = sys.argv.index("--only")
+        if idx + 1 < len(sys.argv):
+            only_ident = sys.argv[idx + 1]
+
     print()
     print("=" * 52)
     print(f"  Code Chat Viewer v{APP_VERSION} - Chat Manager")
@@ -3806,8 +4034,7 @@ def main():
     print()
 
     # Recommend a Force re-render after a minor/major version bump.
-    last_run = _get_last_run_version()
-    version_notice_shown = _needs_force_recommendation(last_run, APP_VERSION)
+    version_notice_shown, last_run = _version_notice_needed(config["_resolved"]["chats_path"])
     if version_notice_shown:
         was = f" (was v{last_run})" if last_run else ""
         print("  " + "═" * 50)
@@ -3819,7 +4046,8 @@ def main():
 
     # Interactive mode selection (manual/double-click only)
     interactive_session = (sys.stdout.isatty() and not name_search and not current_mode
-                           and not force_regen and not btw_mode and not audit_mode)
+                           and not force_regen and not btw_mode and not audit_mode
+                           and not only_ident)
     if interactive_session:
         print("  [1] Normal — update only modified chats (fast)")
         print("  [2] Force  — regenerate ALL chats from scratch (slow)")
@@ -3900,6 +4128,52 @@ def main():
                 return main()
         return
 
+    # ---- Only mode short-circuit: regenerate a SINGLE chat and open it ----
+    # Fast path for --only: resolve one chat (UUID / hash / free text),
+    # render just its HTML — no full-tree scan, no dashboard rebuild — and open it.
+    # The chat lands in Chats/ (Active); a later full run re-files it if needed.
+    if only_ident:
+        print("-" * 52)
+        jsonl = find_jsonl_by_ident(only_ident, source_path)
+        if not jsonl or not jsonl.exists():
+            print(f"  No chat found matching: {only_ident}")
+            print("=" * 52)
+            print()
+            if sys.stdout.isatty() and os.name == "nt":
+                _countdown_close(60)
+            return
+
+        hash_prefix = get_hash_from_filename(jsonl.name)
+        # Capture any previous HTML (possibly in a subfolder) BEFORE rendering, so
+        # we can atomic-swap: render the new one first, then drop the stale one.
+        existing = find_existing_html(output_path, hash_prefix)
+        print(f"  Regenerating only: {resolve_chat_title(jsonl, sessions_meta)}")
+        result, error = generate_chat_html(
+            jsonl, chats_path, "", f"../{index_filename}",
+            sessions_meta, history_entries=history_entries,
+            time_format=config["time_format"],
+        )
+        print()
+        print("=" * 52)
+        if result:
+            new_path = chats_path / result
+            if existing and existing.resolve() != new_path.resolve():
+                try:
+                    existing.unlink()
+                except OSError:
+                    pass
+            print(f"  Ready: {result}")
+            print("=" * 52)
+            print()
+            open_in_browser(new_path)
+        else:
+            print(f"  Error: {error}")
+            print("=" * 52)
+            print()
+        if sys.stdout.isatty() and os.name == "nt":
+            _countdown_close(60)
+        return
+
     print("-" * 52)
     print("  Scanning chats...")
 
@@ -3967,7 +4241,10 @@ def main():
 
         if existing_html:
             if force_regen or needs_update(jsonl_file, existing_html):
-                existing_html.unlink()
+                # Atomic-swap semantics: generate FIRST; only remove the previous
+                # HTML once the new one exists, and only if it's a different file (a
+                # rename, or a move out of a subfolder). A failed regeneration keeps
+                # the good previous version instead of losing the chat.
                 result, error = generate_chat_html(
                     jsonl_file, chats_path, agent_suffix,
                     f"../{index_filename}", sessions_meta,
@@ -3975,6 +4252,12 @@ def main():
                     time_format=config["time_format"],
                 )
                 if result:
+                    new_path = chats_path / result
+                    if existing_html.resolve() != new_path.resolve():
+                        try:
+                            existing_html.unlink()
+                        except OSError:
+                            pass
                     print(f"  UPDATED: {display_name}")
                     stats["updated"].append(display_name)
                 else:

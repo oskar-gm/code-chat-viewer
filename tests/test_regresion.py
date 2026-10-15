@@ -7,13 +7,9 @@ BUG (resuelto): AskUserQuestion con `questions` serializado como string.
 Algunos clientes emiten el tool_use de AskUserQuestion con `questions` (o el
 `input` entero, o los `edits` de MultiEdit) como string JSON en vez de como
 lista/objeto. El render iteraba los caracteres del string y reventaba con
-"'str' object has no attribute 'get'". Caso real detectado en un JSONL de
-cli-dev (2026-05-03). Fix: parse defensivo (_coerce_json_list/_dict) + guardas
+"'str' object has no attribute 'get'". Caso real detectado en un historial
+propio (2026-05-03). Fix: parse defensivo (_coerce_json_list/_dict) + guardas
 isinstance antes de iterar estructuras anidadas.
-
-Nota: el bug de separadores triplicados en comandos sigue abierto — carece de
-reproducción documentada y no se blinda aquí hasta disponer de un chat que lo
-dispare (ver SLIPKNOT.md).
 """
 
 import json

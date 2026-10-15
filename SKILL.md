@@ -5,7 +5,7 @@ license: Complete terms in LICENSE
 metadata:
   author: Óscar González Martín
   repository: https://github.com/oskar-gm/code-chat-viewer
-  version: 2.6.0
+  version: 2.7.0
   keywords: claude-code, claude-code-history, chat-history, conversation-history, chat-visualization, jsonl-converter, html-export, conversation-logs, terminal-ui, developer-tools
   tags: claude-code, claude-code-history, chat-history, chat-logs, json-converter, ai-tools, conversation-export, skill
 ---
@@ -56,6 +56,7 @@ Ask these questions interactively (suggest defaults in parentheses):
 4. **Agent chats**: "Include agent sub-chats? (yes/no)"
    - Default: yes
    - If yes: "Minimum agent file size in KB?" (default: 3)
+   - If yes: "Include compaction agents (internal `/compact` summarizer sub-chats)? (yes/no)" (default: no)
 
 5. **Inactive days**: "Days of inactivity before organizing?"
    - Default: 5
@@ -64,7 +65,7 @@ Ask these questions interactively (suggest defaults in parentheses):
    - Default: yes
    - If yes: "Maximum size in KB to classify as short?" (default: 40)
 
-7. **Archive management**: "Automatically archive large inactive chats? (yes/no)"
+7. **Archive management**: "Automatically archive old inactive chats? (yes/no)"
    - Default: yes
 
 ### Step 3: Create config.json
@@ -105,15 +106,16 @@ python scripts/visualizer.py <input.jsonl> [output.html]
 
 If no output filename is provided, the script generates one automatically with format `Chat YYYY-MM-DD HH-MM hash.html`.
 
-## Workflow: Open Specific Chat
+## Workflow: Command-Line Flags
 
-The manager supports CLI flags to open a specific chat instead of the dashboard:
+The manager supports CLI flags to open or regenerate specific chats, rebuild everything, and build the BTW and Audit views:
 
 | Flag | Usage | Description |
 |------|-------|-------------|
 | `--name "terms"` | `python scripts/manager.py --name "my chat"` | Find and open a chat by name (flexible: all words match, any order, case-insensitive) |
 | `--current <path>` | `python scripts/manager.py --current /path/to/session.jsonl` | Open the chat for a specific JSONL file |
 | `--current` | `python scripts/manager.py --current` | Auto-detect current session from CWD |
+| `--only "id"` | `python scripts/manager.py --only "a1b2c3d4"` | Regenerate ONLY that one chat (by UUID, hash prefix, or name) and open it — no full-tree scan, no dashboard rebuild. Main chats only: agent sub-chats open from the dashboard |
 | `--force` | `python scripts/manager.py --force` | Regenerate ALL chats (ignores modification time check) |
 | `--btw` | `python scripts/manager.py --btw` | Generate `btw.html` aggregating all `/btw` queries (skips chat generation) |
 | `--audit` | `python scripts/manager.py --audit 50` | Scan recent chats (50 by default; pass a number or `all`) for format anomalies and write a report (skips chat generation) |
@@ -123,20 +125,26 @@ Flags can be combined: `python scripts/manager.py --force --name "my chat"`
 ### Interactive mode
 
 When running manually (double-click or terminal without flags), the script prompts for mode selection:
-- **Normal** — Only updates chats whose JSONL source has changed (fast)
-- **Force** — Regenerates all chats from scratch (slow, useful after template changes)
+- **[1] Normal** — Only updates chats whose JSONL source has changed (fast)
+- **[2] Force** — Regenerates all chats from scratch (slow, useful after template changes)
+- **[3] BTW** — Generates `btw.html` from the `/btw` history (skips chat generation; same as `--btw`)
+- **[4] Audit** — Scans recent chats for format anomalies (skips chat generation; same as `--audit`)
+- **[5] Reconfigure** — Changes settings without deleting `config.json` by hand: guided re-setup, open the file in an editor, or do it via Claude Code
+- **[6] Check updates** — Checks GitHub for a newer **stable** release (published ≥72h ago), on demand; the tool stays offline otherwise
 
 ## File Locations
 
-Claude Code stores chat logs at:
+CCV reads Claude Code's chat logs from (configurable as `source.projects_path`):
 
-- **Windows**: `%USERPROFILE%\.claude\projects\` and `%USERPROFILE%\.claude\chats\`
-- **Linux/Mac**: `~/.claude/projects/` and `~/.claude/chats/`
+- **Windows**: `%USERPROFILE%\.claude\projects\`
+- **Linux/Mac**: `~/.claude/projects/`
 
 Each project subdirectory contains:
-- `*.jsonl` — Main chat files (UUID-named)
-- `agent-*.jsonl` — Agent sub-chat files
+- `<session-uuid>.jsonl` — Main chat files
+- `<session-uuid>/subagents/agent-*.jsonl` — Agent sub-chats, under the session that launched them (`agent-acompact-*` are compaction helpers, skipped unless `agents.include_compaction` is on)
 - `sessions-index.json` — Rich metadata (name, summary, message count, git branch)
+
+The `/btw` queries come from `history.jsonl`, next to the `projects` folder (`~/.claude/history.jsonl`).
 
 ## Configuration Reference
 
@@ -150,6 +158,7 @@ Each project subdirectory contains:
 | `time_format` | string | `12h` | Timestamp clock: `12h` (AM/PM) or `24h` |
 | `agents.include` | bool | `true` | Include agent sub-chat files |
 | `agents.min_size_kb` | int | `3` | Minimum agent file size to include (KB) |
+| `agents.include_compaction` | bool | `false` | Also include compaction agents (`agent-acompact-*`) |
 | `inactive_days` | int | `5` | Days without activity before organizing |
 | `shorts.enabled` | bool | `true` | Separate small inactive chats |
 | `shorts.folder` | string | `Shorts` | Subfolder name for short chats |
@@ -167,33 +176,34 @@ Environment variables (take precedence over `config.json`):
 
 The generated dashboard (`CCV-Dashboard.html` by default) is a self-contained HTML file with:
 
-- **Sortable table**: Click column headers to sort (default: last used, descending); every column is sortable except the link icon
-- **Full-text search**: Filter and exclude search across complete chat names and UUIDs (not just visible truncated text)
+- **Sortable table**: Click column headers to sort (default: last used, descending); every column is sortable except the link icon, and text columns (Name, Project, Category, UUID, Branch) sort A→Z on the first click
+- **Full-text search**: Filter and exclude search across complete chat names, not just the visible truncated text; with "Search names only" unchecked, it covers the whole row (UUID included)
 - **Exclude filter**: Hide rows containing specific text (complementary to the search filter)
-- **Category filters**: Checkboxes for Active/Shorts/Archived (only shown if enabled)
+- **Category filters**: Checkboxes for Active/Shorts/Archived (Shorts and Archived are shown while the feature is enabled or its folder still holds chats)
 - **Permanent UUID column**: full session UUID with a one-click copy button (was an optional column in earlier versions)
-- **Optional columns**: Branch, Size, and `BTW` (per-chat `/btw` count) — toggle with checkboxes
-- **Recap / First prompt sub-rows**: optional collapsible rows under each chat (toggles in Columns) showing the chat's last obtainable summary and the full first user message; searchable, sort-aware, persisted in localStorage
+- **Optional columns**: Branch and Size — toggle with checkboxes in the Columns group
+- **Recap / First prompt sub-rows**: optional collapsible rows under each chat (toggles in the View group) showing the chat's last obtainable summary and the full first user message; searchable, sort-aware, persisted in localStorage
 - **Select & delete**: a Select button enables per-row checkboxes (with a select-all-visible master) and a Delete button that opens a confirmation modal listing the affected chats; it generates a ready-to-copy command (PowerShell / macOS / Linux tabs) that removes each chat's HTML and original `.jsonl` — to trash by default, permanent via toggle. The dashboard cannot delete files itself (static HTML): the user runs the command in their terminal and regenerates
 - **Toolbar redesign**: a **Search** toggle shows/hides the search row (search + exclude inputs) with memory when hidden; a **scope selector** ("Search names only", on by default) restricts search to the chat name or searches the full row when unchecked; a **Clear** button resets all saved state (selection, filters, columns, expanded rows, search) via localStorage removal + reload; responsive at two breakpoints (Search/Clear separate from Filter+Columns at ≤1000px; Filter separates from Columns at ≤680px)
 - **Name tooltips**: Hover to see full chat name when truncated in the table
-- **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard
+- **UUID copy**: Click the copy button in the UUID column to copy the full session ID to clipboard (it shows OK, or ✗ if the browser refuses the copy)
 - **Direct links**: Icon to open each chat HTML file
 - **Enriched data**: Uses `sessions-index.json` and direct JSONL parsing for name, summary, message count, git branch
 - **State persistence**: Remembers sort order, filters, search text, exclude text, visible columns and the Select mode via localStorage (5h TTL)
-- **Agent chats**: sub-chats launched by the Task tool (under `<session>/subagents/`) are shown via an "Agents" toggle in the View group (off by default, with a count). Each carries an AGENT badge and is nested under its invoking chat with a `└─` connector; its name is `subagent_type · description`, and "agent completed" notices link to its chat. Orphan agents (invoker not found) are grouped in a collapsible block at the end. Compaction agents (`agent-acompact-*`) and context-ref forks are filtered out; set `agents.include_compaction: true` in config to keep them
+- **Agent chats**: sub-chats launched by the Task tool (under `<session>/subagents/`) are shown via an "Agents" toggle in the View group (off by default, with a count). Each carries an AGENT badge and is nested under its invoking chat with a `└─` connector; its name is `subagent_type · description`, and "agent completed" notices link to its chat through the dashboard (`#open=`), so the link survives moving chats between folders. Orphan agents (invoker not found) are grouped in a collapsible block at the end. Compaction agents (`agent-acompact-*`) are filtered out unless `agents.include_compaction` is `true`; context-ref forks are not chats and are always skipped
 - **Version-aware Force**: running Force ([2] / `--force`) records the version in `config.json`; on the next launch, a minor/major version bump shows a notice recommending a Force rebuild so all chats render consistently with the new version
 - **Snapshot filtering**: Automatically excludes file-history-snapshot entries (Claude Code's undo system)
 - **Header buttons**: Feedback (opens GitHub Issues) and Latest release (links to the newest release to check for updates); Feedback also in footer
 - **BTW Queries view**: `[3]` in the interactive menu or the `--btw` flag generates a standalone `btw.html` aggregating every `/btw` query from `~/.claude/history.jsonl`, grouped by chat, with Expand/Collapse all and a real-time filter
-- **Format Audit**: `[4]` in the interactive menu or the `--audit` flag scans the most recent chats (50 by default, or `all`) for format anomalies — unrecognized message/content types, empty thinking/text blocks, parse errors — and writes a `CCV-Audit <date>.html` report next to the dashboard, opening it on completion. Read-only; useful after a Claude Code update to spot JSONL format changes
+- **Deep links**: `CCV-Dashboard.html#open=<session>` opens that chat wherever it currently lives (used by fork banners and agent links); if the chat has no page, a notice says so
+- **Format Audit**: `[4]` in the interactive menu or the `--audit` flag scans the most recent main chats (50 by default, or `all`; agent sub-chats are not scanned) for format anomalies — unrecognized message/content types, empty thinking/text blocks, parse errors — and writes a `CCV-Audit <date>.html` report next to the dashboard, opening it on completion. Read-only; useful after a Claude Code update to spot JSONL format changes
 
 ## Chat Page Features
 
 Each generated chat HTML includes:
 
 - **Chat title in header**: Displays the chat name next to "Code Chat Viewer" (resolved from custom title, session index, AI-generated title, or first prompt — `/rename` always takes priority)
-- **Chat UUID in header**: Full session UUID shown on the right side of the header. Selectable text plus a one-click SVG copy button (visual confirmation on copy)
+- **Chat UUID in header**: Full session UUID shown on the right side of the header. Selectable text plus a one-click SVG copy button (green ✓ on copy, red ✗ if the copy fails)
 - **Dashboard link**: "Back to Dashboard" button in header (links adjust automatically for subfolder location)
 - **Conversation filter**: Filter messages by text content
 - **Edit diff view**: `Tool: Edit` and `Tool: MultiEdit` blocks render `old_string` vs `new_string` side-by-side inside the tool-use box, with red/green color coding (Dark theme by default, Light theme toggle available)
@@ -201,9 +211,10 @@ Each generated chat HTML includes:
 - **Write tool view**: Full-width collapsible block with blue accent, consistent with Edit's `new_string` side; the shared `Edits/Writes` toggle expands/collapses both at once
 - **`/btw` queries inline**: `/btw` questions from `~/.claude/history.jsonl` matching the session are injected inline as user-style messages (Claude cream styling), with a counter in the stats bar
 - **Full date in timestamps**: messages show the full `YYYY-MM-DD` date with configurable 12h (AM/PM, default) or 24h time (`time_format` in config)
-- **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, position counter, and keyboard shortcuts (N/P)
+- **Multi-mode message navigation**: All/User/Assistant modes with prev/next buttons, first/last message buttons, position counter, and keyboard shortcuts (N/P)
 - **Collapsible thinking blocks**: Collapsed by default with first-line preview; expand for full content
 - **Collapsible tool-use blocks**: Collapsed by default; expand for full untruncated content
+- **Height cap**: long tool results, thinking and tool-use blocks scroll within half the window; Edit/Write panes and compact parts keep their own cap, so there is always a single level of scroll
 - **Smart message rendering**: Commands (`[COMMAND]`), compact blocks (collapsible, purple), task notifications (color by status), user responses (amber block: the question with its header as a chip, the offered options with the chosen one highlighted, free-text "Other" answers and notes — built from the structured result), user rejections (`[REJECTED]` with feedback, coral/red), inline user comments (`[USER COMMENT]`, amber)
 - **Image modal/lightbox**: `image`-type content displays as an "Open image" link (media type + file size); clicking opens a full-screen overlay (X, ESC, or click outside to close; responsive). Base64 is embedded in the HTML and decoded to a blob URL on open
 - **System markers**: `<system-reminder>` content shown in orange (tags stripped); `[Request interrupted by user]` shown with a soft red background and red text
@@ -211,16 +222,19 @@ Each generated chat HTML includes:
 - **Color-coded highlights**: Blue for user, green for assistant, purple for compact, amber for user responses/comments, red for rejections
 - **Smart scroll**: Centers short messages; pins long messages to top for readability
 - **Header buttons**: Feedback (opens GitHub Issues) and Latest release (check for updates), plus Back to Dashboard; Feedback also in footer
-- **Collapsible tool results**: Click to expand/collapse
+- **Collapsible tool results**: Click (or Enter/Space from the keyboard) to expand/collapse
 - **Inline images**: when message text references a pasted image with an `[Image #N]` marker, that marker renders as a clickable chip opening the image in the modal (mapped by paste order), instead of a separate "Open image" button
 - **Assistant metadata order**: model name first, then the date/time in bold, then the branch
 - **Conversation rewinds**: real rewinds (you retried a prompt, dropping what came after) show as a one-line teal marker `↺ Rewind · N messages back · «destination»` with a Go button that scrolls to where the conversation resumed; tool-only forks and auto-saved snapshots are ignored, and N is the on-screen distance to the destination ("just above" when right over the marker)
-- **Copy button per message**: always-visible icon at the top-right of each message that copies its text (green check on success)
+- **Copy button per message**: always-visible icon at the top-right of each message that copies its text (green check on success, red cross if the copy fails)
+- **Fork banner**: a chat branched off another session opens with a banner linking to the origin session through the dashboard (`#open=<session>`); without a dashboard (standalone run) it just names the origin session
+- **Problems made visible**: a log line that can't be read shows as a red `CCV parse error` block, and a message that fails to render as a red `CCV render error` block, instead of breaking the chat
+- **Model switches and documents**: a model switch mid-answer shows as `[Model fallback: A → B]`; an attached PDF is named as `[Document: PDF «title» · N KB]`
 - **"Messages only" filter**: checkbox next to the conversation filter that keeps only user/assistant messages with real text (hides tools, thinking, compacts, snapshots…); combines with the text filter
 - **Rewinds count in stats bar**: shows the real rewind count (replaces the old raw snapshot count)
 - **Creation date in header**: labelled `Created:`, formatted per the time setting (24h → DD/MM/YYYY, 12h → MM/DD/YYYY)
 - **Theme toggle clarity**: the Edit/Write diff theme button previews the current theme (dark while dark, cream once light) and its label states the action ("Switch to light/dark")
-- **State remembered across refresh**: per-chat localStorage keeps the scroll position, the Edit/Write diff theme, the user/bot/all selector, the search + "Messages only" filter, and which Edit/Write blocks are open (thinking and other non-button foldables reset closed by design)
+- **State remembered across refresh**: per chat, a refresh (F5) or back/forward keeps the scroll position, the Edit/Write diff theme, the user/bot/all selector, the search + "Messages only" filter, and which Edit/Write blocks are open, while reopening the chat starts clean (thinking and other non-button foldables reset closed by design)
 - **Accessible image modal**: the close button stays legible over any image (translucent disc + text-shadow, 44×44 hit area, visible focus ring); the overlay is a `role="dialog"` with `aria-modal`, a focus trap, and focus returned to the trigger on close
 
 ## Chat Categories
@@ -247,32 +261,34 @@ Some chats lack metadata in `sessions-index.json`. This is normal for old chats,
 
 ## Requirements
 
-- **Python**: 3.6 or higher
+- **Python**: tested on 3.13 (earlier versions are not verified)
 - **Dependencies**: None (Python standard library only)
-- **OS**: Windows, Linux, macOS
+- **OS**: tested on Windows (Linux and macOS are provided for in the code but not verified)
 
 ## Technical Notes
 
-- The manager imports functions from `visualizer.py` (same directory): `parse_chat_json`, `generate_html`, `get_chat_timestamp`, `generate_output_filename`, `ICON_BASE64`, `ICON_FAVICON_BASE64`
-- HTML generation is deterministic: same JSONL input produces same HTML output
+- The manager imports its parsing and rendering functions from `visualizer.py`, so both scripts must stay in the same directory
+- Re-rendering the same JSONL gives the same page, except the embedded generation time (and times are shown in the local time zone of the machine that renders)
 - The manager only regenerates an HTML if the source JSONL is newer than the existing HTML (unless `--force` is used)
 - Timestamps are always verified against JSONL file mtime (sessions-index.json can be stale)
 - Message counts and metadata are extracted directly from JSONL files for accuracy
-- File-history-snapshot entries (Claude Code's undo system) are automatically filtered out
+- File-history-snapshot entries (Claude Code's undo system) are filtered out, except those that mark a real conversation rewind, which render as a one-line Rewind marker
+- Internal bookkeeping entries that Claude Code writes into the log (request caches, costs, progress…) are ignored: never shown or counted as messages
+- System markers (local-command caveat and output, task notifications, tool rejections) are recognized only when a message starts with them; a message that merely quotes one keeps its text
 - Organization (shorts/archive) uses the JSONL modification time as "last used" indicator, not the HTML generation time
 - Dashboard links in chat pages are automatically adjusted for subfolder depth (`../` or `../../`)
 - Favicon uses a dark icon (visible on white browser tabs); header uses a light icon (visible on dark header)
 - Both icons are embedded as base64 — no external files needed
-- The manager auto-opens the dashboard in the browser after generation (interactive mode only)
-- With `--name` or `--current`, the manager opens the matching chat HTML instead of the dashboard
+- The manager auto-opens the dashboard in the browser after generation when run from a terminal
+- With `--name`, `--current`, or `--only`, the manager opens the matching chat instead of the dashboard (`--only` also regenerates just that chat first)
 - Chat title resolution chain: JSONL `custom_title` (`/rename`) → sessions-index `customTitle` → sessions-index `summary` → JSONL `ai-title` (AI-generated title by Claude Code) → first prompt (60 chars) → "Untitled". `/rename` always takes priority; `ai-title` sits above the first prompt but below the summary
 - "(no content)" placeholder messages from Claude Code internals are automatically filtered out
 - Scripts can be run manually without Claude Code — they pause before closing on Windows (double-click compatible)
-- In interactive mode (manual execution), the user can choose between normal and force mode before scanning
+- In interactive mode (manual execution), the user picks an option from the menu before anything runs (see Interactive mode)
 
 ## Attribution
 
 Author: Óscar González Martín
 Repository: https://github.com/oskar-gm/code-chat-viewer
 License: MIT
-Version: 2.6.0
+Version: 2.7.0

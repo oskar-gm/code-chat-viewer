@@ -40,12 +40,17 @@ def test_parse_chat_json_ignora_lineas_vacias(viz, tmp_path):
     assert msgs[1]["_line_number"] == 4
 
 
-def test_parse_chat_json_linea_malformada_no_rompe(viz, tmp_path, capsys):
+def test_parse_chat_json_linea_malformada_marcador_visible(viz, tmp_path, capsys):
     path = tmp_path / "malformada.jsonl"
     path.write_text('{"ok": 1}\n{ esto no es json }\n{"ok": 2}\n', encoding="utf-8")
     msgs = viz.parse_chat_json(str(path))
-    # La línea corrupta se salta; las válidas se conservan.
-    assert [m["ok"] for m in msgs] == [1, 2]
+    # La línea corrupta NO se descarta en silencio: se conserva como marcador
+    # (_parse_error) entre las válidas, para que un cambio de formato o una línea
+    # truncada se vea en el HTML en lugar de desaparecer. Las válidas se conservan.
+    assert [m["ok"] for m in msgs if "ok" in m] == [1, 2]
+    errores = [m for m in msgs if m.get("type") == "_parse_error"]
+    assert len(errores) == 1
+    assert errores[0]["_line_number"] == 2
     assert "line 2" in capsys.readouterr().out.lower()
 
 

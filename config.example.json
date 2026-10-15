@@ -14,7 +14,8 @@
 
   "agents": {
     "include": true,
-    "min_size_kb": 3
+    "min_size_kb": 3,
+    "include_compaction": false
   },
 
   "inactive_days": 5,

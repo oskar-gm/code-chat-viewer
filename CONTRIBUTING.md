@@ -17,6 +17,10 @@ First off, thank you for considering contributing to Code Chat Viewer! It's peop
 - [Style Guidelines](#style-guidelines)
 - [Commit Guidelines](#commit-guidelines)
 - [Pull Request Process](#pull-request-process)
+- [Testing](#testing)
+- [Questions?](#questions)
+- [Attribution](#attribution)
+- [License](#license)
 
 ### Code of Conduct
 
@@ -44,16 +48,16 @@ Before creating a bug report, please check existing issues to avoid duplicates. 
 - **Clear title and description**
 - **Steps to reproduce** the issue
 - **Expected behavior** vs **actual behavior**
-- **Sample JSON file** (if applicable)
+- **Sample JSONL file** (redacted, if applicable)
 - **Screenshots** of the HTML output (if applicable)
-- **Python version** and **operating system**
+- **Claude Code version**, **Python version** and **operating system**
 
 **Example:**
 ```markdown
 **Bug:** Tool results not collapsing
 
 **Steps to reproduce:**
-1. Run visualizer.py with sample.json
+1. Run visualizer.py with sample.jsonl
 2. Open output.html in browser
 3. Click on tool result header
 
@@ -61,7 +65,8 @@ Before creating a bug report, please check existing issues to avoid duplicates. 
 **Actual:** Nothing happens
 
 **Environment:**
-- Python: 3.9.1
+- Claude Code: 2.x (`claude --version`)
+- Python: 3.13
 - OS: Windows 11
 - Browser: Chrome 120
 ```
@@ -82,7 +87,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 2. **Discuss major changes** - open an issue first for significant changes
 3. **Write tests** - ensure your code works as expected
 4. **Follow style guidelines** - maintain code consistency
-5. **Update documentation** - keep README.md and comments current
+5. **Update documentation** - keep README.md, SKILL.md and comments current. A new configuration option goes in three places: `config.example.json`, `interactive_setup()` in `scripts/manager.py`, and Step 2 of `SKILL.md`
 
 ### Style Guidelines
 
@@ -90,7 +95,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 - Follow **PEP 8** style guide
 - Use **4 spaces** for indentation (no tabs)
-- Maximum line length: **100 characters**
+- Maximum line length: **100 characters** (the embedded HTML/CSS/JS templates are the exception)
 - Use **meaningful variable names**
 - Add **docstrings** to functions and classes
 - Include **type hints** where appropriate
@@ -110,7 +115,7 @@ def format_timestamp(timestamp_str: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         return dt.strftime('%I:%M %p').lstrip('0')
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return ""
 ```
 
@@ -175,7 +180,7 @@ Fixes #15
 
 ### Pull Request Process
 
-1. **Update documentation** - reflect your changes in README.md if needed
+1. **Update documentation** - reflect your changes in README.md and SKILL.md if needed
 2. **Test thoroughly** - ensure all functionality works
 3. **Keep commits clean** - rebase/squash if needed
 4. **Write clear PR description**:
@@ -206,7 +211,7 @@ Fixes #15
 
 ### Testing
 
-The project includes a pytest suite in `tests/` covering parsing, rendering, chat generation, dashboard utilities, and regression tests (~81% coverage on `visualizer.py`). All fixtures are synthetic — no real chat data needed.
+The project includes a pytest suite in `tests/` covering parsing, rendering, chat generation, dashboard utilities, and regression tests. All fixtures are synthetic — no real chat data needed.
 
 **Run the test suite** (requires `pytest`; install with `pip install pytest`):
 
@@ -214,7 +219,7 @@ The project includes a pytest suite in `tests/` covering parsing, rendering, cha
 python -m pytest tests
 ```
 
-Run from the repository root. The suite is fast and self-contained.
+Run from the repository root. The suite is fast and self-contained. Node.js is optional: the tests that run the pages' JavaScript are skipped without it.
 
 Before submitting your PR, please also test manually:
 
@@ -238,11 +243,11 @@ Before submitting your PR, please also test manually:
    - Thinking blocks
 
 4. **Edge cases:**
-   - Empty JSON files
+   - Empty JSONL files
    - Malformed JSON lines
    - Very long messages
    - Special characters
-   - Missing config.json (should show helpful error)
+   - Missing config.json (should launch the interactive setup, or show a clear error when not run from a terminal)
 
 5. **Browser compatibility:**
    - Chrome
@@ -272,20 +277,24 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 Antes que nada, ¡gracias por considerar contribuir a Code Chat Viewer! Son personas como tú las que hacen de esta herramienta algo mejor para todos.
 
-### Tabla de Contenidos
+### Tabla de contenidos
 
-- [Código de Conducta](#código-de-conducta)
-- [Primeros Pasos](#primeros-pasos)
-- [¿Cómo Puedo Contribuir?](#cómo-puedo-contribuir)
-- [Guías de Estilo](#guías-de-estilo)
-- [Guías de Commits](#guías-de-commits)
-- [Proceso de Pull Request](#proceso-de-pull-request)
+- [Código de conducta](#código-de-conducta)
+- [Primeros pasos](#primeros-pasos)
+- [¿Cómo puedo contribuir?](#cómo-puedo-contribuir)
+- [Guías de estilo](#guías-de-estilo)
+- [Guías de commits](#guías-de-commits)
+- [Proceso de pull request](#proceso-de-pull-request)
+- [Pruebas](#pruebas)
+- [¿Preguntas?](#preguntas)
+- [Atribución](#atribución)
+- [Licencia](#licencia)
 
-### Código de Conducta
+### Código de conducta
 
-Este proyecto y todos los que participan en él se rigen por nuestro [Código de Conducta](CODE_OF_CONDUCT.md). Al participar, se espera que respetes este código.
+Este proyecto y todos los que participan en él se rigen por nuestro [código de conducta](CODE_OF_CONDUCT.md). Al participar, se espera que respetes este código.
 
-### Primeros Pasos
+### Primeros pasos
 
 1. **Haz fork del repositorio** en GitHub
 2. **Clona tu fork** localmente:
@@ -298,38 +307,39 @@ Este proyecto y todos los que participan en él se rigen por nuestro [Código de
    git checkout -b feature/nombre-de-tu-funcionalidad
    ```
 
-### ¿Cómo Puedo Contribuir?
+### ¿Cómo puedo contribuir?
 
-#### Reportar Bugs
+#### Reportar bugs
 
 Antes de crear un reporte de bug, revisa los issues existentes para evitar duplicados. Al crear un reporte de bug, incluye:
 
 - **Título y descripción claros**
 - **Pasos para reproducir** el problema
 - **Comportamiento esperado** vs **comportamiento real**
-- **Archivo JSON de ejemplo** (si aplica)
+- **Archivo JSONL de ejemplo** (anonimizado, si aplica)
 - **Capturas de pantalla** del HTML generado (si aplica)
-- **Versión de Python** y **sistema operativo**
+- **Versión de Claude Code**, **versión de Python** y **sistema operativo**
 
 **Ejemplo:**
 ```markdown
 **Bug:** Los resultados de herramientas no se colapsan
 
 **Pasos para reproducir:**
-1. Ejecutar visualizer.py con sample.json
+1. Ejecutar visualizer.py con sample.jsonl
 2. Abrir output.html en navegador
-3. Hacer click en header de tool result
+3. Hacer clic en la cabecera del tool result
 
 **Esperado:** El contenido del tool result debería colapsarse
 **Real:** No pasa nada
 
 **Entorno:**
-- Python: 3.9.1
+- Claude Code: 2.x (`claude --version`)
+- Python: 3.13
 - SO: Windows 11
 - Navegador: Chrome 120
 ```
 
-#### Sugerir Mejoras
+#### Sugerir mejoras
 
 Las sugerencias de mejoras se rastrean como issues de GitHub. Al crear una sugerencia de mejora, incluye:
 
@@ -339,21 +349,21 @@ Las sugerencias de mejoras se rastrean como issues de GitHub. Al crear una suger
 - **Soluciones alternativas** que hayas considerado
 - **Ejemplos** de proyectos similares (si aplica)
 
-#### Contribuciones de Código
+#### Contribuciones de código
 
 1. **Revisa issues existentes** - alguien podría estar trabajando en ello
 2. **Discute cambios importantes** - abre un issue primero para cambios significativos
 3. **Escribe tests** - asegura que tu código funciona como se espera
 4. **Sigue las guías de estilo** - mantén consistencia en el código
-5. **Actualiza documentación** - mantén README.md y comentarios actualizados
+5. **Actualiza documentación** - mantén README.md, SKILL.md y los comentarios al día. Una opción de configuración nueva va en tres sitios: `config.example.json`, `interactive_setup()` de `scripts/manager.py` y el paso 2 de `SKILL.md`
 
-### Guías de Estilo
+### Guías de estilo
 
-#### Estilo de Código Python
+#### Estilo de código Python
 
 - Sigue la guía de estilo **PEP 8**
 - Usa **4 espacios** para indentación (sin tabs)
-- Longitud máxima de línea: **100 caracteres**
+- Longitud máxima de línea: **100 caracteres** (salvo las plantillas HTML/CSS/JS embebidas)
 - Usa **nombres de variables significativos**
 - Añade **docstrings** a funciones y clases
 - Incluye **type hints** donde sea apropiado
@@ -373,7 +383,7 @@ def format_timestamp(timestamp_str: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         return dt.strftime('%I:%M %p').lstrip('0')
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return ""
 ```
 
@@ -385,15 +395,15 @@ def format_timestamp(timestamp_str: str) -> str:
 - Mantén principios de **diseño responsive**
 - Prueba en múltiples navegadores
 
-#### Estilo de Documentación
+#### Estilo de documentación
 
 - Usa lenguaje claro y conciso
 - Incluye **ejemplos de código**
 - Añade **capturas de pantalla** cuando sean útiles
-- Mantén bilingüe (Inglés + Español)
+- Mantén bilingüe (inglés + español)
 - Actualiza ambos idiomas simultáneamente
 
-### Guías de Commits
+### Guías de commits
 
 Escribe mensajes de commit claros y descriptivos siguiendo este formato:
 
@@ -437,9 +447,9 @@ antes de adjuntar.
 Fixes #15
 ```
 
-### Proceso de Pull Request
+### Proceso de pull request
 
-1. **Actualiza documentación** - refleja tus cambios en README.md si es necesario
+1. **Actualiza documentación** - refleja tus cambios en README.md y SKILL.md si es necesario
 2. **Prueba exhaustivamente** - asegura que toda la funcionalidad funciona
 3. **Mantén commits limpios** - rebase/squash si es necesario
 4. **Escribe descripción clara de PR**:
@@ -457,10 +467,10 @@ Fixes #15
    ## Pruebas
    Cómo probaste estos cambios
    
-   ## Capturas de Pantalla
+   ## Capturas de pantalla
    (si aplica)
    
-   ## Issues Relacionados
+   ## Issues relacionados
    Closes #123
    ```
 
@@ -470,7 +480,7 @@ Fixes #15
 
 ### Pruebas
 
-El proyecto incluye una suite pytest en `tests/` que cubre parseo, renderizado, generación de chats, utilidades del dashboard y tests de regresión (~81% de cobertura en `visualizer.py`). Todas las fixtures son sintéticas — no se necesitan datos reales de chat.
+El proyecto incluye una suite pytest en `tests/` que cubre parseo, renderizado, generación de chats, utilidades del dashboard y tests de regresión. Todas las fixtures son sintéticas — no se necesitan datos reales de chat.
 
 **Ejecutar la suite de tests** (requiere `pytest`; instalar con `pip install pytest`):
 
@@ -478,7 +488,7 @@ El proyecto incluye una suite pytest en `tests/` que cubre parseo, renderizado, 
 python -m pytest tests
 ```
 
-Ejecutar desde la raíz del repositorio. La suite es rápida y autocontenida.
+Ejecutar desde la raíz del repositorio. La suite es rápida y autocontenida. Node.js es opcional: los tests que ejecutan el JavaScript de las páginas se omiten sin él.
 
 Antes de enviar tu PR, prueba también manualmente:
 
@@ -502,11 +512,11 @@ Antes de enviar tu PR, prueba también manualmente:
    - Bloques de pensamiento
 
 4. **Casos extremos:**
-   - Archivos JSON vacíos
+   - Archivos JSONL vacíos
    - Líneas JSON malformadas
    - Mensajes muy largos
    - Caracteres especiales
-   - config.json ausente (debe mostrar error descriptivo)
+   - config.json ausente (debe lanzar el setup interactivo, o mostrar un error claro si no se ejecuta desde una terminal)
 
 5. **Compatibilidad de navegadores:**
    - Chrome
